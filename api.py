@@ -14,10 +14,15 @@ import time
 import hmac
 import hashlib
 import urllib
+from server import HTTPCoinAcceptor
+from threading import Thread, Lock
 
 
 base_url = 'https://api.binance.com/api/v3/' # base Binance API URL
 env_path = '.env' # path to the environment file containing API keys
+server_host = 'localhost'
+server_port = 1337
+
 # defaults (may be overriden at runtime)
 qcoin = 'BTC' # quote coin (what are we trading for, uppercase)
 profit = 400 # [%] target profit (percentage of buy price)
@@ -138,6 +143,39 @@ def sell_coin_limit(session: requests.Session, bcoin: str, bamount: float, price
   print(f"Check the {bcoin}/{qcoin} trading pair on Binance now!")
 
 
+class MarketManager:
+  def __init__(self, qamount: float):
+    self.qamount = qamount
+    self.mutex = Lock()
+    self.done = False
+
+  def start(self, bcoin: str):
+    self.mutex.acquire()
+    if self.done:
+      self.mutex.release()
+      print('Market operation already executed!')
+      return
+    self.done = True
+    self.mutex.release()
+    with requests.Session() as session:
+      # buy <bcoin> immediately at market price, get qty. and avg. price
+      qty, price = buy_coin_market(session, bcoin, self.qamount)
+      # sell bought <bcoin> with <profit>% profit
+      sell_coin_limit(session, bcoin, qty, price)
+
+
+def coin_from_input(manager: MarketManager):
+  bcoin = ''
+  while bcoin == '':
+    bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
+  manager.start(bcoin)
+
+
+def coin_from_http(manager: MarketManager):
+  acceptor = HTTPCoinAcceptor(manager, server_host, server_port)
+  acceptor.start()
+
+
 def main():
   global qcoin, profit
 
@@ -152,15 +190,16 @@ def main():
   qamount = input(f'Enter {qcoin} amount to sell [default: {qbalance}]: ')
   qamount = qbalance if qamount == '' else float(qamount)
 
-  bcoin = ''
-  while bcoin == '':
-    bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
+  manager = MarketManager(qamount)
 
-  with requests.Session() as session:
-    # buy <bcoin> immediately at market price, get qty. and avg. price
-    qty, price = buy_coin_market(session, bcoin, qamount)
-    # sell bought <bcoin> with <profit>% profit
-    sell_coin_limit(session, bcoin, qty, price)
+  input_thr = Thread(target=coin_from_input, args = (manager,))
+  http_thr  = Thread(target=coin_from_http, args = (manager,))
+
+  input_thr.start()
+  http_thr.start()
+
+  input_thr.join()
+  http_thr.join()
 
 
 env = get_env_data_as_dict(env_path)
