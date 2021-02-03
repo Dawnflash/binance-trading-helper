@@ -30,6 +30,12 @@ def get_env_data_as_dict(path: str) -> dict:
       in f.readlines() if not line.startswith('#'))
 
 
+# format float to 7 decimals with stripped zeros
+def ffloat(val: float) -> str:
+  sv = f'{val:.7f}'.rstrip('0')
+  return sv[:-1] if sv.endswith('.') else sv
+
+
 # current timestamp in milliseconds
 def tstamp() -> int:
   return time.time_ns() // 1000000
@@ -73,36 +79,39 @@ def coin_balance(session: requests.Session) -> float:
     raise Exception(f'Failed to query user data, bailing out')
   for balance in resp['balances']:
     if balance['asset'] == qcoin:
-      print(f'Your free balance for {qcoin} is {balance["free"]} (locked: {balance["locked"]})')
-      return float(balance['free'])
+      bf, bl = float(balance['free']), float(balance['locked'])
+      print(f'Your free balance for {qcoin} is {ffloat(bf)} (locked: {ffloat(bl)})')
+      return bf
   raise Exception(f'Coin {qcoin} not found in your account. Make sure to choose a valid coin!')
 
 
 # print buy order status and return average fill price
 def order_status(bcoin: str, resp: dict) -> (float, float):
+  bqty, qqty = float(resp["executedQty"]), float(resp["cummulativeQuoteQty"])
   print(f'Order status: {resp["status"]}')
-  print(f'Bought {resp["executedQty"]} {bcoin} using {resp["cummulativeQuoteQty"]} {qcoin}')
+  print(f'Bought {ffloat(bqty)} {bcoin} using {ffloat(qqty)} {qcoin}')
   print('Fills:')
   price = 0
   for fill in resp['fills']:
-    price += float(fill['price']) * float(fill['qty']) / float(resp['executedQty'])
-    print(f'  {fill["qty"]} {bcoin} at {fill["price"]} {qcoin} (fee: {fill["commission"]} {fill["commissionAsset"]})')
-  print(f'Average buy price: {price} {qcoin}')
+    p, q, c = float(fill['price']), float(fill['qty']), float(fill['commission'])
+    price += p * q / bqty
+    print(f'  {ffloat(q)} {bcoin} at {ffloat(p)} {qcoin} (fee: {ffloat(c)} {fill["commissionAsset"]})')
+  print(f'Average buy price: {ffloat(price)} {qcoin}')
   if (price == 0):
     raise Exception(f'Total price of bought {bcoin} seems to be zero. Something is wrong! Check Binance manually!')
-  return float(resp['executedQty']), price
+  return bqty, price
 
 
 # buy <bcoin> with <qamount> of <qcoin> at market price
 # return amount of <bcoin> purchased (executed) and average (weighted) price
 def buy_coin_market(session: requests.Session, bcoin: str, qamount: float) -> (float, float):
-  print(f'Buying {bcoin} with {qcoin} at market price...')
+  print(f'Buying {bcoin} using {ffloat(qamount)} {qcoin} at market price...')
 
   params = {
     'symbol': bcoin + qcoin,
     'side': 'BUY',
     'type': 'MARKET',
-    'quoteOrderQty': qamount, # buy with <qamount> of <qcoin>
+    'quoteOrderQty': ffloat(qamount), # buy with <qamount> of <qcoin>
     'timestamp': tstamp()
   }
   _, resp = api_req(session, 'POST', 'order', params)
@@ -113,15 +122,15 @@ def buy_coin_market(session: requests.Session, bcoin: str, qamount: float) -> (f
 # sell <bamount> of <bcoin>
 def sell_coin_limit(session: requests.Session, bcoin: str, bamount: float, price: float):
   limit = (100 + profit) / 100 * price
-  print(f'Selling {bamount} {bcoin} for {qcoin} with {profit}% profit at price limit {limit}...')
+  print(f'Selling {ffloat(bamount)} {bcoin} for {qcoin} with {ffloat(profit)}% profit at price limit {ffloat(limit)}...')
 
   params = {
     'symbol': bcoin + qcoin,
     'side': 'SELL',
     'type': 'LIMIT',
     'timeInForce': 'GTC', # good till cancelled
-    'quantity': bamount,
-    'price': limit,
+    'quantity': ffloat(bamount),
+    'price': ffloat(limit),
     'timestamp': tstamp()
   }
   _, resp = api_req(session, 'POST', 'order', params)
