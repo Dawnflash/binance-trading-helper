@@ -8,9 +8,6 @@ Follow the prompts and good luck.
 """
 
 import requests
-import os
-import sys
-import time
 import hmac
 import hashlib
 import urllib

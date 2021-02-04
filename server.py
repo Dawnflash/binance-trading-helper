@@ -1,6 +1,5 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from util import InvalidPair
-import time
 
 class MyHandler(BaseHTTPRequestHandler):
   def do_POST(self):
