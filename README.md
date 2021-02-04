@@ -13,4 +13,5 @@ Do not overuse, Binance only allows 100 orders per 10s. You might get rate limit
 
 0. Create a binance.com API key (allow basic info and spot trading)
 1. Copy `.env.example` to `.env` and fill in your Binance API key+secret
-2. Run `api.py` using Python 3 and respond to prompts
+2. Override settings in `.env` if you wish, settings `DEFAULT_` may be overriden at runtime
+3. Run `api.py` using Python 3 and respond to prompts
