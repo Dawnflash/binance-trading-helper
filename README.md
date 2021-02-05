@@ -1,8 +1,8 @@
 # Binance trading helper
 
-This python script creates a market buy order followed by a limit sell order with a set profit. This only works at binance.com.
+This python script creates a market buy order followed by limit and/or market sell orders with a set profit. This only works at binance.com.
 
-Do not overuse, Binance only allows 100 orders per 10s. You might get rate limited otherwise.
+Do not overuse, Binance only allows 100 orders per 10s and roughly 1200 requests per minute. You might get rate limited otherwise.
 
 ## Requirements
 
