@@ -1,220 +1,204 @@
-#!/usr/bin/env python
-
-""" Binance quick market buy+limit sell script
-Author: Dawnflash
-
-Ensure .env is created (use .env.example as a template)
-Follow the prompts and good luck.
+""" Binance API structures
 """
 
 import requests
 import hmac
 import hashlib
 import urllib
-from server import HTTPCoinAcceptor
-from util import InvalidPair, Environment, ffloat, tstamp, bencode
-from threading import Thread, Lock
+from util import Environment, bencode, ffmt, tstamp, InvalidPair
 
 
-# global environment
-env = Environment()
+# class for communicating with Binance API
+class BinanceApi:
+  class ApiError(ValueError):
+    def __init__(self, msg, data):
+      self.data = data
+      super().__init__(msg)
 
+  def __init__(self, env: Environment):
+    self.env  = env
+    self.url  = env['BASE_API_URL']
+    self.key  = env['BINANCE_API_KEY']
+    self.bsec = bencode(env['BINANCE_API_SECRET'])
+    self.pair = {} # current trading pair
+    self.price_precision = 8
 
-# sign <val> dictionary with SHA256 HMAC (pass your request parameters to <val>)
-def sign(val: dict) -> str:
-  bkey, bval = bencode(env['BINANCE_API_SECRET']), bencode(urllib.parse.urlencode(val))
-  return hmac.new(bkey, bval, hashlib.sha256).hexdigest()
+  # format base asset amount by Binance rules (use for base amounts)
+  def bfmt(self, val: float) -> str:
+    return ffmt(val, self.pair['baseAssetPrecision'])
 
+  # format quote asset amount by Binance rules (use for prices)
+  def qfmt(self, val: float) -> str:
+    return ffmt(val, self.price_precision)
 
-# make a Binance API request
-def api_req(session: requests.Session,
-            method: str,
-            uri: str,
-            params: dict = {},
-            headers: dict = {},
-            signed: bool = True) -> (dict, dict):
-  headers['Accept'] = 'application/json'
+  # set current trading pair and price precision
+  def set_pair(self, pair: dict):
+    self.pair = pair
+    qprec = pair['quoteAssetPrecision']
+    tsize = int(float(pair['filters'][0]['tickSize']) * 10 ** qprec)
+    self.price_precision = qprec - len(str(tsize)) + len(str(tsize).rstrip('0'))
 
-  if signed:
-    headers['X-MBX-APIKEY'] = env['BINANCE_API_KEY']
-    params['signature'] = sign(params)
+  # sign <val> dictionary with SHA256 HMAC (pass your request parameters to <val>)
+  def sign(self, val: dict) -> str:
+    bval = bencode(urllib.parse.urlencode(val))
+    return hmac.new(self.bsec, bval, hashlib.sha256).hexdigest()
 
-  url = urllib.parse.urljoin(env['BASE_API_URL'], uri)
-  resp = session.request(method, url, params=params, headers=headers)
+  # make a Binance API request
+  def req(self, session: requests.Session,
+          method: str,
+          uri: str,
+          params: dict = {},
+          headers: dict = {},
+          signed: bool = True) -> (dict, dict):
+    headers['Accept'] = 'application/json'
 
-  # check for issues
-  if resp.status_code == 418: # IP ban
-    raise Exception(f"Your IP is banned for {resp.headers['Retry-After']} seconds. Wait!")
-  if resp.status_code == 429: # Rate limiting
-    raise Exception(f"Your IP is rate limited for {resp.headers['Retry-After']} seconds. Wait!")
-  if not resp.ok: # other issues
-    raise Exception(f'Request for {url} failed\n{resp.status_code}: {resp.json()}')
-  return resp.headers, resp.json()
+    if signed:
+      headers['X-MBX-APIKEY'] = self.key
+      params['signature'] = self.sign(params)
 
+    url = urllib.parse.urljoin(self.url, uri)
+    resp = session.request(method, url, params=params, headers=headers)
 
-# return exchange info
-def exchange_info(session: requests.Session) -> dict:
-  _, resp = api_req(session, 'GET', 'exchangeInfo', signed=False)
-  return resp
+    # check for issues
+    if resp.status_code == 418: # IP ban
+      raise Exception(f"Your IP is banned for {resp.headers['Retry-After']} seconds. Wait!")
+    if resp.status_code == 429: # Rate limiting
+      raise Exception(f"Your IP is rate limited for {resp.headers['Retry-After']} seconds. Wait!")
+    if not resp.ok: # other issues
+      raise self.ApiError(f'Request for {url} failed\n{resp.status_code}: {resp.json()}', resp.json())
+    return resp.headers, resp.json()
 
+  # return exchange info
+  def exchange_info(self, session: requests.Session) -> dict:
+    _, resp = self.req(session, 'GET', 'exchangeInfo', signed=False)
+    return resp
 
-# get valid exchange symbols for a give quote coin
-def quote_symbols(exinfo: dict) -> dict:
-  symbols = {}
-  if 'symbols' not in exinfo:
-    raise InvalidPair('Symbols not found in exchange info')
-  for symbol in exinfo['symbols']:
-    if symbol['quoteAsset'] == env.qcoin:
-      symbols[symbol['baseAsset']] = symbol
-  if not symbols:
-    raise InvalidPair(f'No matching trading pairs found for quote asset {env.qcoin}')
-  return symbols
+  # return 5min average price
+  def avg_price(self, session: requests.Session) -> float:
+    _, resp = self.req(session, 'GET', 'avgPrice',
+                      {'symbol': self.pair['symbol']}, signed=False)
+    return resp
 
+  # return upper sell price limit
+  def sell_max_limit(self, session: requests.Session) -> float:
+    avg = self.avg_price(session)
+    # base for the percent limit multiplier
+    avgp = float(avg['price']) / avg['mins'] * self.pair['filters'][1]['avgPriceMins']
+    plimit = avgp * float(self.pair['filters'][1]['multiplierUp'])
+    # fixed limit
+    flimit = float(self.pair['filters'][0]['maxPrice'])
+    # take 98% of the upper percent limit just to be sure
+    return min(0.98 * plimit, flimit)
 
-# get <qcoin> balance in your spot account
-def coin_balance(session: requests.Session) -> float:
-  _, resp = api_req(session, 'GET', 'account', {'timestamp': tstamp()})
-  if 'balances' not in resp:
-    raise Exception(f'Failed to query user data, bailing out')
-  for balance in resp['balances']:
-    if balance['asset'] == env.qcoin:
-      bf, bl = float(balance['free']), float(balance['locked'])
-      print(f'Your free balance for {env.qcoin} is {ffloat(bf)} (locked: {ffloat(bl)})')
-      return bf
-  raise Exception(f'Coin {env.qcoin} not found in your account. ' + \
-                  'Make sure to choose a valid coin!')
+  # return last price
+  def last_price(self, session: requests.Session) -> float:
+    _, resp = self.req(session, 'GET', 'ticker/price',
+                      {'symbol': self.pair['symbol']}, signed=False)
+    return float(resp['price'])
 
+  # get <qcoin> balance in your spot account
+  def coin_balance(self, session: requests.Session) -> float:
+    _, resp = self.req(session, 'GET', 'account', {'timestamp': tstamp()})
+    if 'balances' not in resp:
+      raise Exception(f'Failed to query user data, bailing out')
+    for balance in resp['balances']:
+      if balance['asset'] == self.env.qcoin:
+        bf, bl = float(balance['free']), float(balance['locked'])
+        print(f'Your free balance for {self.env.qcoin} is {ffmt(bf)} ' + \
+              f'(locked: {ffmt(bl)})')
+        return bf
+    raise Exception(f'Coin {self.env.qcoin} not found in your account. ' + \
+                    'Make sure to choose a valid coin!')
 
-# print buy order status and return average fill price
-def order_status(bcoin: str, resp: dict) -> (float, float):
-  bqty, qqty = float(resp["executedQty"]), float(resp["cummulativeQuoteQty"])
-  print(f'Order status: {resp["status"]}')
-  print(f'Bought {ffloat(bqty)} {bcoin} using {ffloat(qqty)} {env.qcoin}')
-  print('Fills:')
-  price = 0
-  for fill in resp['fills']:
-    p, q, c = float(fill['price']), float(fill['qty']), float(fill['commission'])
-    price += p * q / bqty
-    print(f'  {ffloat(q)} {bcoin} at {ffloat(p)} {env.qcoin} ' + \
-          f'(fee: {ffloat(c)} {fill["commissionAsset"]})')
-  print(f'Average buy price: {ffloat(price)} {env.qcoin}')
-  if (price == 0):
-    raise Exception(f'Total price of bought {bcoin} seems to be zero. ' + \
-                    'Something is wrong! Check Binance manually!')
-  return bqty, price
+  # get valid exchange symbols for a give quote coin
+  def quote_symbols(self, exinfo: dict) -> dict:
+    symbols = {}
+    if 'symbols' not in exinfo:
+      raise InvalidPair('Symbols not found in exchange info')
+    for symbol in exinfo['symbols']:
+      if symbol['status'] == 'TRADING' and \
+        symbol['isSpotTradingAllowed'] and \
+        symbol['quoteOrderQtyMarketAllowed'] and \
+        symbol['quoteAsset'] == self.env.qcoin:
+        symbols[symbol['baseAsset']] = symbol
+    if not symbols:
+      raise InvalidPair(f'No usable trading pairs found for quote asset {self.env.qcoin}')
+    return symbols
 
+  # print buy order status and return average fill price
+  def order_status(self, resp: dict) -> (float, float):
+    bcoin = self.pair['baseAsset']
+    bqty, qqty = float(resp["executedQty"]), float(resp["cummulativeQuoteQty"])
+    print(f'Executed market order (status: {resp["status"]})')
+    v1 = 'bought' if resp['side'] == 'BUY' else 'sold'
+    v2 = 'with' if resp['side'] == 'BUY' else 'for'
+    print(f'{v1.capitalize()} {self.bfmt(bqty)} {bcoin} {v2} {self.qfmt(qqty)} {self.env.qcoin}')
+    print('Fills:')
+    price = 0
+    for fill in resp['fills']:
+      p, q = float(fill['price']), float(fill['qty'])
+      price += p * q / bqty
+      print(f'  {self.bfmt(q)} {bcoin} at {self.qfmt(p)} {self.env.qcoin} ' + \
+            f'(fee: {fill["commission"]} {fill["commissionAsset"]})')
+    print(f'Average price: {self.qfmt(price)} {self.env.qcoin}')
+    if (price == 0):
+      raise ValueError(f'Total price of {v1} {bcoin} seems to be zero. ' + \
+                      'Something is wrong! Check Binance manually!')
+    return bqty, price
 
-# buy <bcoin> with <qamount> of <qcoin> at market price
-# return amount of <bcoin> purchased (executed) and average (weighted) price
-def buy_coin_market(session: requests.Session, bcoin: str, qamount: float) -> (float, float):
-  print(f'Buying {bcoin} using {ffloat(qamount)} {env.qcoin} at market price...')
+  # buy <bcoin> with <qamount> of <qcoin> at market price
+  # return amount of <bcoin> purchased (executed) and average (weighted) price in <qcoin>
+  def buy_coin_market(self, session: requests.Session, qamount: float) -> (float, float):
+    bcoin = self.pair['baseAsset']
+    print(f'Buying {bcoin} using {self.qfmt(qamount)} {self.env.qcoin} at market price...')
 
-  params = {
-    'symbol': bcoin + env.qcoin,
-    'side': 'BUY',
-    'type': 'MARKET',
-    'quoteOrderQty': ffloat(qamount), # buy with <qamount> of <qcoin>
-    'timestamp': tstamp()
-  }
-  _, resp = api_req(session, 'POST', 'order', params)
+    params = {
+      'symbol': self.pair['symbol'],
+      'side': 'BUY',
+      'type': 'MARKET',
+      'quoteOrderQty': self.qfmt(qamount), # buy with <qamount> of <qcoin>
+      'timestamp': tstamp()
+    }
+    _, resp = self.req(session, 'POST', 'order', params)
 
-  return order_status(bcoin, resp)
+    return self.order_status(resp)
 
+  # sell <bamount> of <bcoin> for <qcoin> at market price
+  # return amount of <qcoin> purchased (executed) and average (weighted) price in <bcoin>
+  def sell_coin_market(self, session: requests.Session, bamount: float) -> (float, float):
+    bcoin = self.pair['baseAsset']
+    print(f'Selling {bcoin} using {self.qfmt(bamount)} {self.env.qcoin} at market price...')
 
-# sell <bamount> of <bcoin>
-def sell_coin_limit(session: requests.Session, bcoin: str, bamount: float, price: float):
-  limit = (100 + env.profit) / 100 * price
-  print(f'Selling {ffloat(bamount)} {bcoin} for {env.qcoin} ' + \
-        f'with {ffloat(env.profit)}% profit at price limit {ffloat(limit)}...')
+    params = {
+      'symbol': self.pair['symbol'],
+      'side': 'SELL',
+      'type': 'MARKET',
+      'quantity': self.bfmt(bamount), # sell <bamount> of <bcoin>
+      'timestamp': tstamp()
+    }
+    _, resp = self.req(session, 'POST', 'order', params)
 
-  params = {
-    'symbol': bcoin + env.qcoin,
-    'side': 'SELL',
-    'type': 'LIMIT',
-    'timeInForce': 'GTC', # good till cancelled
-    'quantity': ffloat(bamount),
-    'price': ffloat(limit),
-    'timestamp': tstamp()
-  }
-  _, resp = api_req(session, 'POST', 'order', params)
-  print(f'Executed limit sell order (status: {resp["status"]})')
-  print(f"Check the {bcoin}/{env.qcoin} trading pair on Binance now!")
+    return self.order_status(resp)
 
+  # sell <bamount> of <bcoin>, return success
+  def sell_coin_limit(self, session: requests.Session, bamount: float, price: float) -> bool:
+    bcoin = self.pair['baseAsset']
+    print(f'Selling {self.bfmt(bamount)} {bcoin} for {self.env.qcoin} ' + \
+          f'at price limit {self.qfmt(price)}...')
 
-class MarketManager:
-  def __init__(self, pairs: dict, qamount: float):
-    self.qamount = qamount
-    self.pairs = pairs
-    self.mutex = Lock()
-    self.done = False
-
-  # True => success, False => repeat, Exception => abort
-  def start(self, bcoin: str):
-    self.mutex.acquire()
-    if self.done:
-      self.mutex.release()
-      raise Exception('Market operation already executed!')
-    if bcoin not in self.pairs:
-      self.mutex.release()
-      raise InvalidPair(f'Trading pair {bcoin}/{env.qcoin} not found')
-    self.done = True
-    self.mutex.release()
-    with requests.Session() as session:
-      # buy <bcoin> immediately at market price, get qty. and avg. price
-      qty, price = buy_coin_market(session, bcoin, self.qamount)
-      # sell bought <bcoin> with <profit>% profit
-      sell_coin_limit(session, bcoin, qty, price)
-      return True
-
-
-def coin_from_input(manager: MarketManager):
-  while True:
-    bcoin = ''
-    while bcoin == '':
-      try:
-        bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
-      except Exception as e:
-        print(str(e))
-        return
+    params = {
+      'symbol': self.pair['symbol'],
+      'side': 'SELL',
+      'type': 'LIMIT',
+      'timeInForce': 'GTC', # good till cancelled
+      'quantity': self.bfmt(bamount),
+      'price': self.qfmt(price),
+      'timestamp': tstamp()
+    }
     try:
-      manager.start(bcoin)
-    except InvalidPair as e:
-      print(str(e))
-
-
-def coin_from_http(manager: MarketManager):
-  acceptor = HTTPCoinAcceptor(manager, env.conn)
-  acceptor.start()
-
-
-def main():
-  iqcoin = input(f'Enter quote coin symbol (coin to trade for) [default: {env.qcoin}]: ')
-  env.qcoin = env.qcoin if iqcoin == '' else iqcoin.upper()
-
-  with requests.Session() as session:
-    info      = exchange_info(session)
-    qbalance  = coin_balance(session)
-  
-  symbols = quote_symbols(info)
-
-  qamount = input(f'Enter {env.qcoin} amount to sell [default: {ffloat(qbalance)}]: ')
-  qamount = env.qbalperc / 100 * qbalance if qamount == '' else float(qamount)
-
-  iprofit = input(f'Enter desired profit in % [default: {ffloat(env.profit)}]: ')
-  env.profit = env.profit if iprofit == '' else float(iprofit)
-
-  manager = MarketManager(symbols, qamount)
-
-  input_thr = Thread(target=coin_from_input, args = (manager,))
-  http_thr  = Thread(target=coin_from_http, args = (manager,))
-  http_thr.daemon = True
-
-  input_thr.start()
-  http_thr.start()
-
-  input_thr.join()
-  http_thr.join(1)
-
-
-if __name__ == '__main__':
-  main()
+      _, resp = self.req(session, 'POST', 'order', params)
+      print(f'Executed limit sell order (status: {resp["status"]})')
+    except BinanceApi.ApiError as e:
+      print(f'Limit sell failed with {e.data}')
+      return False
+    return True

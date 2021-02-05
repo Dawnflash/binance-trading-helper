@@ -1,5 +1,9 @@
+""" Helper structures and methods
+"""
+
 import os
 import time
+from enum import Enum
 
 # read file at <path> and extract envvars from it
 def get_env_data_as_dict(path: str) -> dict:
@@ -14,10 +18,9 @@ def get_env_data_as_dict(path: str) -> dict:
   return env
 
 
-# format float to 7 decimals with stripped zeros
-def ffloat(val: float) -> str:
-  sv = f'{val:.7f}'.rstrip('0')
-  return sv[:-1] if sv.endswith('.') else sv
+# format float to 8 decimals with stripped zeros
+def ffmt(val: float, decimals: int = 8) -> str:
+  return f'{val:.{decimals}f}'
 
 
 # current timestamp in milliseconds
@@ -35,15 +38,33 @@ class InvalidPair(ValueError):
   pass
 
 
+# sell strategy enum
+class SellStrategy(Enum):
+  LIMIT = 'LIMIT'
+  MARKET = 'MARKET'
+  HYBRID = 'HYBRID'
+
+
 # global environment
 class Environment:
   def __init__(self, f: str = '.env'):
-    self.raw = get_env_data_as_dict(os.path.join(os.path.dirname(os.path.realpath(__file__)), f))
+    self.raw = get_env_data_as_dict(
+      os.path.join(os.path.dirname(os.path.realpath(__file__)), f))
     self.conn = self.raw['SERVER_HOST'], int(self.raw['SERVER_PORT'])
-    self.qcoin = self.raw['DEFAULT_QCOIN']
-    self.profit = float(self.raw['DEFAULT_PROFIT'])
-    self.qbalperc = float(self.raw['DEFAULT_QBAL_PERC'])
-    self.limit_redc = float(self.raw['DEFAULT_LIMIT_REDC'])
-  
+
+    self.override   = bool(int(self.raw['DEFAULT_OVERRIDE']))
+    self.qcoin      = self.raw['DEFAULT_QCOIN']
+    self.buy_perc   = float(self.raw['DEFAULT_BUY_PERC'])
+    self.sell_perc  = float(self.raw['DEFAULT_SELL_PERC'])
+    self.profit     = float(self.raw['DEFAULT_PROFIT'])
+    self.sell_strat = SellStrategy(self.raw['DEFAULT_SELL_STRATEGY'])
+    if self.sell_strat == SellStrategy.MARKET:
+      self.min_profit = self.profit
+      self.inc_limit  = False
+    else:
+      self.min_profit = float(self.raw['DEFAULT_MIN_PROFIT'])
+      self.inc_limit  = bool(int(self.raw['DEFAULT_ALLOW_LIMIT_INCREASE']))
+    self.qbalance   = 0.0
+
   def __getitem__(self, key):
     return self.raw[key]

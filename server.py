@@ -16,7 +16,7 @@ class MyServer(HTTPServer):
     # Because HTTPServer is an old-style class, super() can't be used.
     HTTPServer.__init__(self, *args, **kwargs)
     self.acceptor = acceptor
-  
+
   def accept_coin(self, coin: str):
     self.acceptor.accept(coin)
 
@@ -25,7 +25,7 @@ class HTTPCoinAcceptor:
   def __init__(self, manager, conn):
     self.srv = MyServer(self, conn, MyHandler)
     self.mgr = manager
-  
+
   def start(self):
     try:
       self.srv.serve_forever()
@@ -34,7 +34,7 @@ class HTTPCoinAcceptor:
     except Exception as e:
       print(str(e))
       self.stop()
-  
+
   def accept(self, coin: str):
     try:
       self.mgr.start(coin)
@@ -44,7 +44,7 @@ class HTTPCoinAcceptor:
     except Exception as e:
       self.stop()
       raise e
-  
+
   def stop(self):
     print('closing')
     self.srv.server_close()
