@@ -50,16 +50,16 @@ class MarketManager:
                         tprice: float, bprice: float, lprice: float) -> (bool, float):
     eprofit = 100 * (lprice / bprice - 1)
     print(f'[INFO] Last market price is {api.qfmt(lprice)} {env.qcoin}' + \
-          f'(expected profit: {eprofit}%)')
+          f'(expected profit: {eprofit:.2f}%)')
     # market sells only if last price exceeds target price
     if lprice > tprice:
       # initiate market sell
       qty, price = api.sell_coin_market(session, sqty)
       profit  = 100 * (price / bprice - 1)
-      print(f'[MARKET SELL] executed with {profit}% profit')
+      print(f'[MARKET SELL] executed with {profit:.2f}% profit')
       return True, qty
     else:
-      print(f'[SKIP] Last market price is too low')
+      print('[SKIP] Last market price is too low')
     return False, 0
 
   def sell_coins_limit(self, session: requests.Session, sqty: float,
@@ -105,7 +105,7 @@ class MarketManager:
       # sell the remaining coins if needed
       if bqty < sell_bqty or orders == 1:
         sell_bqty = bqty
-      print(f'[INFO] Attempting to sell {sell_bqty} {bcoin} at {tprice} {env.qcoin} ' + \
+      print(f'[INFO] Attempting to sell {sell_bqty} {bcoin} at {api.qfmt(tprice)} {env.qcoin} ' + \
             f'[{orders} orders left]')
 
       # sleep a little
