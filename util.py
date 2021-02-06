@@ -58,11 +58,12 @@ class Environment:
     self.buy_perc   = float(self.raw['DEFAULT_BUY_PERC'])
     self.sell_perc  = float(self.raw['DEFAULT_SELL_PERC'])
     self.profit     = float(self.raw['DEFAULT_PROFIT'])
+    self.stop       = float(self.raw['DEFAULT_STOP_LEVEL'])
     self.sell_strat = SellStrategy(self.raw['DEFAULT_SELL_STRATEGY'])
     if self.sell_strat == SellStrategy.MARKET:
       self.min_profit = self.profit
     else:
-      self.min_profit = float(self.raw['DEFAULT_MIN_PROFIT'])
+      self.min_profit = float(self.raw['DEFAULT_MIN_LIMIT_PROFIT'])
 
   def __getitem__(self, key):
     return self.raw[key]

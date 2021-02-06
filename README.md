@@ -31,9 +31,10 @@ I will explain the configuration options here.
 * `DEFAULT_QCOIN` is the name of your quote asset (coin): the coin you wish to sell and later buy back with profit
 * `DEFAULT_BUY_PERC` is the percentage of your quote asset balance you wish to sell. If prompts are not disabled, you can change the exact quote asset amount on startup
 * `DEFAULT_SELL_PERC` is the percentage of bought base asset (the coin to buy with the quote asset) you wish to sell at once. Keep this at 100 if you wish to sell everything this script buys at once. Otherwise, it will sell the coin until the remaining amount falls under this percentage. Then it will sell the rest at once.
-* `DEFAULT_PROFIT` is your desired profit. Mind that setting your profit very high may impair your ability to set a successful limit sell. You should use `HYBRID` or `MARKET` strategies with high profits (such as >100%)
 * `DEFAULT_SELL_STRATEGY` is the sell strategy you wish to use. See [Sell strategies](#sell-strategies) for details. The options are `LIMIT`, `MARKET` and `HYBRID`.
-* `DEFAULT_MIN_PROFIT` (used with `HYBRID` and `LIMIT` sell strategies) is the minimum profit (in %) you are willing to accept using a limit sell. If the maximum price Binance allows falls between your `MIN_PROFIT` and `PROFIT`, a limit sell will be created at the maximum allowed limit.
+* `DEFAULT_PROFIT` is your desired profit. Mind that setting your profit very high may impair your ability to set a successful limit sell. You should use `HYBRID` or `MARKET` strategies with high profits (such as >100%)
+* `DEFAULT_STOP_LEVEL` is the stop level (buy price percentage) to help you automatically manage risk. If market orders are enabled by your sell strategy and the last traded price falls below this threshold, a market sell will trigger. If limit orders are enabled and value is >-100, limit orders will be replaced with OCO orders with stop price at this level. A limit (low) price will be placed at 95% of this level. Must be lower than profits.
+* `DEFAULT_MIN_LIMIT_PROFIT` (used with `HYBRID` and `LIMIT` sell strategies) is the minimum profit (in %) you are willing to accept using a limit sell. If the maximum price Binance allows falls between your `MIN_PROFIT` and `PROFIT`, a limit sell will be created at the maximum allowed limit.
 
 ## Sell strategies
 

@@ -193,44 +193,44 @@ class BinanceApi:
                       'Something is wrong! Check Binance manually!')
     return bqty, price
 
-  # buy <bcoin> with <qamount> of <qcoin> at market price
+  # buy <bcoin> with <qqty> of <qcoin> at market price
   # return amount of <bcoin> purchased (executed) and average (weighted) price in <qcoin>
-  def buy_coin_market(self, session: requests.Session, qamount: float) -> (float, float):
+  def buy_coin_market(self, session: requests.Session, qqty: float) -> (float, float):
     bcoin = self.pair['baseAsset']
-    print(f'Buying {bcoin} using {self.qfmt(qamount)} {self.env.qcoin} at market price...')
+    print(f'Buying {bcoin} using {self.qfmt(qqty)} {self.env.qcoin} at market price...')
 
     params = {
       'symbol': self.pair['symbol'],
       'side': 'BUY',
       'type': 'MARKET',
-      'quoteOrderQty': self.qfmt(qamount), # buy with <qamount> of <qcoin>
+      'quoteOrderQty': self.qfmt(qqty), # buy with <qqty> of <qcoin>
       'timestamp': tstamp()
     }
     _, resp = self.req(session, 'POST', 'order', params)
 
     return self.order_status(resp)
 
-  # sell <bamount> of <bcoin> for <qcoin> at market price
+  # sell <bqty> of <bcoin> for <qcoin> at market price
   # return amount of <qcoin> purchased (executed) and average (weighted) price in <bcoin>
-  def sell_coin_market(self, session: requests.Session, bamount: float) -> (float, float):
+  def sell_coin_market(self, session: requests.Session, bqty: float) -> (float, float):
     bcoin = self.pair['baseAsset']
-    print(f'Selling {self.bfmt_mkt(bamount)} {bcoin} at market price...')
+    print(f'Selling {self.bfmt_mkt(bqty)} {bcoin} at market price...')
 
     params = {
       'symbol': self.pair['symbol'],
       'side': 'SELL',
       'type': 'MARKET',
-      'quantity': self.bfmt_mkt(bamount), # sell <bamount> of <bcoin>
+      'quantity': self.bfmt_mkt(bqty), # sell <bqty> of <bcoin>
       'timestamp': tstamp()
     }
     _, resp = self.req(session, 'POST', 'order', params)
 
     return self.order_status(resp)
 
-  # sell <bamount> of <bcoin>, return success
-  def sell_coin_limit(self, session: requests.Session, bamount: float, price: float) -> bool:
+  # sell <bqty> of <bcoin>, return success
+  def sell_coin_limit(self, session: requests.Session, bqty: float, price: float) -> bool:
     bcoin = self.pair['baseAsset']
-    print(f'Selling {self.bfmt(bamount)} {bcoin} for {self.env.qcoin} ' + \
+    print(f'Selling {self.bfmt(bqty)} {bcoin} for {self.env.qcoin} ' + \
           f'at price limit {self.qfmt(price)}...')
 
     params = {
@@ -238,7 +238,7 @@ class BinanceApi:
       'side': 'SELL',
       'type': 'LIMIT',
       'timeInForce': 'GTC', # good till cancelled
-      'quantity': self.bfmt(bamount),
+      'quantity': self.bfmt(bqty),
       'price': self.qfmt(price),
       'timestamp': tstamp()
     }
@@ -247,5 +247,30 @@ class BinanceApi:
       print(f'Executed limit sell order (status: {resp["status"]})')
     except BinanceApi.ApiError as e:
       print(f'Limit sell failed with {e.data}')
+      return False
+    return True
+  
+  # sell <bqty> of <bcoin> as OCO, return success
+  def sell_coin_oco(self, session: requests.Session,
+                    bqty: float, price: float, sprice: float) -> bool:
+    bcoin = self.pair['baseAsset']
+    print(f'Selling {self.bfmt(bqty)} {bcoin} for {self.env.qcoin} ' + \
+          f'at price limit {self.qfmt(price)}...')
+
+    params = {
+      'symbol': self.pair['symbol'],
+      'side': 'SELL',
+      'quantity': self.bfmt(bqty),
+      'price': self.qfmt(price),
+      'stopPrice': self.qfmt(sprice),
+      'stopLimitPrice': self.qfmt(sprice * 0.95),
+      'stopLimitTimeInForce': 'GTC', # good till cancelled
+      'timestamp': tstamp()
+    }
+    try:
+      _, resp = self.req(session, 'POST', 'order/oco', params)
+      print(f'Executed OCO order (status: {resp["listOrderStatus"]})')
+    except BinanceApi.ApiError as e:
+      print(f'OCO sell failed with {e.data}')
       return False
     return True
