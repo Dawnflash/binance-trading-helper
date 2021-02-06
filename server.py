@@ -42,8 +42,8 @@ class HTTPCoinAcceptor:
     except InvalidPair as e:
       print(str(e))
     except Exception as e:
+      print(str(e))
       self.stop()
-      raise e
 
   def stop(self):
     print('closing')

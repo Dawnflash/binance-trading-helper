@@ -21,22 +21,45 @@ class BinanceApi:
     self.key  = env['BINANCE_API_KEY']
     self.bsec = bencode(env['BINANCE_API_SECRET'])
     self.pair = {} # current trading pair
-    self.price_precision = 8
+    self.pfilt = {}
+    self.price_tick = 8
+    self.lot_tick = 8
+    self.mkt_lot_tick = 8
 
   # format base asset amount by Binance rules (use for base amounts)
   def bfmt(self, val: float) -> str:
-    return ffmt(val, self.pair['baseAssetPrecision'])
+    return ffmt(val, self.lot_tick)
+
+  # format base asset amount by Binance rules (for market orders)
+  def bfmt_mkt(self, val: float) -> str:
+    return ffmt(val, self.mkt_lot_tick)
 
   # format quote asset amount by Binance rules (use for prices)
   def qfmt(self, val: float) -> str:
-    return ffmt(val, self.price_precision)
+    return ffmt(val, self.price_tick)
 
   # set current trading pair and price precision
   def set_pair(self, pair: dict):
     self.pair = pair
+    for f in pair['filters']:
+      self.pfilt[f['filterType']] = f
+
     qprec = pair['quoteAssetPrecision']
-    tsize = int(float(pair['filters'][0]['tickSize']) * 10 ** qprec)
-    self.price_precision = qprec - len(str(tsize)) + len(str(tsize).rstrip('0'))
+    bprec = pair['baseAssetPrecision']
+    if 'PRICE_FILTER' in self.pfilt:
+      tsize = int(float(self.pfilt['PRICE_FILTER']['tickSize']) * 10 ** qprec)
+      if tsize:
+        self.price_tick = qprec - len(str(tsize)) + len(str(tsize).rstrip('0'))
+    if 'LOT_SIZE' in self.pfilt:
+      tsize = int(float(self.pfilt['LOT_SIZE']['stepSize']) * 10 ** bprec)
+      if tsize:
+        self.lot_tick = bprec - len(str(tsize)) + len(str(tsize).rstrip('0'))
+    if 'MARKET_LOT_SIZE' in self.pfilt:
+      tsize = int(float(self.pfilt['MARKET_LOT_SIZE']['stepSize']) * 10 ** bprec)
+      if tsize:
+        self.mkt_lot_tick = bprec - len(str(tsize)) + len(str(tsize).rstrip('0'))
+    else:
+      self.mkt_lot_tick = self.lot_tick
 
   # sign <val> dictionary with SHA256 HMAC (pass your request parameters to <val>)
   def sign(self, val: dict) -> str:
@@ -73,22 +96,46 @@ class BinanceApi:
     _, resp = self.req(session, 'GET', 'exchangeInfo', signed=False)
     return resp
 
-  # return 5min average price
+  # return 1min average price
   def avg_price(self, session: requests.Session) -> float:
     _, resp = self.req(session, 'GET', 'avgPrice',
                       {'symbol': self.pair['symbol']}, signed=False)
-    return resp
+    return float(resp['price'])
 
-  # return upper sell price limit
-  def sell_max_limit(self, session: requests.Session) -> float:
-    avg = self.avg_price(session)
-    # base for the percent limit multiplier
-    avgp = float(avg['price']) / avg['mins'] * self.pair['filters'][1]['avgPriceMins']
-    plimit = avgp * float(self.pair['filters'][1]['multiplierUp'])
-    # fixed limit
-    flimit = float(self.pair['filters'][0]['maxPrice'])
-    # take 98% of the upper percent limit just to be sure
-    return min(0.98 * plimit, flimit)
+  # return lower and upper price limit (<avg> avg price)
+  def price_bound(self, avg: float) -> (float, float):
+    dnlimit, dnflimit = 0, 0
+    uplimit, upflimit = float('inf'), float('inf')
+    if 'PERCENT_PRICE' in self.pfilt:
+      # relative limit
+      dnlimit = avg * float(self.pfilt['PERCENT_PRICE']['multiplierDown'])
+      uplimit = avg * float(self.pfilt['PERCENT_PRICE']['multiplierUp'])
+    if 'PRICE_FILTER' in self.pfilt:
+      # fixed limit
+      dnflimit = float(self.pfilt['PRICE_FILTER']['minPrice'])
+      upflimit = float(self.pfilt['PRICE_FILTER']['maxPrice'])
+    # take 5% of relative limits just to be sure
+    return max(1.05 * dnlimit, dnflimit), min(0.95 * uplimit, upflimit)
+
+  # return lower and upper quantity limit
+  # <price> limit price or avg price (for market orders)
+  # <market> is market order
+  def qty_bound(self, price, market: bool = False) -> (float, float):
+    # get notional lower bound
+    not_lim = 0
+    if 'MIN_NOTIONAL' in self.pfilt:
+      f = self.pfilt['MIN_NOTIONAL']
+      m = float(f['minNotional'])
+      if market and f['applyToMarket'] or not market:
+        not_lim = m / price * 1.05 # add 5% just to be sure
+
+    if market and 'MARKET_LOT_SIZE' in self.pfilt:
+      f = self.pfilt['MARKET_LOT_SIZE']
+      return max(float(f['minQty']), not_lim), float(f['maxQty'])
+    if 'LOT_SIZE' in self.pfilt:
+      f = self.pfilt['LOT_SIZE']
+      return max(float(f['minQty']), not_lim), float(f['maxQty'])
+    return 0, float('inf')
 
   # return last price
   def last_price(self, session: requests.Session) -> float:
@@ -167,13 +214,13 @@ class BinanceApi:
   # return amount of <qcoin> purchased (executed) and average (weighted) price in <bcoin>
   def sell_coin_market(self, session: requests.Session, bamount: float) -> (float, float):
     bcoin = self.pair['baseAsset']
-    print(f'Selling {bcoin} using {self.qfmt(bamount)} {self.env.qcoin} at market price...')
+    print(f'Selling {self.bfmt_mkt(bamount)} {bcoin} at market price...')
 
     params = {
       'symbol': self.pair['symbol'],
       'side': 'SELL',
       'type': 'MARKET',
-      'quantity': self.bfmt(bamount), # sell <bamount> of <bcoin>
+      'quantity': self.bfmt_mkt(bamount), # sell <bamount> of <bcoin>
       'timestamp': tstamp()
     }
     _, resp = self.req(session, 'POST', 'order', params)

@@ -13,6 +13,7 @@ from server import HTTPCoinAcceptor
 from util import InvalidPair, Environment, SellStrategy, ffmt
 from api import BinanceApi
 from time import sleep
+from sys import exit
 
 
 class MarketManager:
@@ -62,30 +63,34 @@ class MarketManager:
     return False, 0
 
   def sell_coins_limit(self, session: requests.Session, sqty: float,
-                       tprice: float, mprice: float, bprice: float, limit: float) -> bool:
-    max_profit = 100 * (limit / bprice - 1)
-    print(f'[INFO] Current max limit price: {api.qfmt(limit)} {env.qcoin}' + \
-          f'(max possible profit: {max_profit}%)')
-    price = min(tprice, limit)
-    # increase target profit if allowed and possible
-    if env.inc_limit and limit > tprice:
-      price = limit
-      print(f'[INFO] Increasing target profit limit to {max_profit}%')
+                       tprice: float, mprice: float, bprice: float, bound: tuple) -> bool:
+    lo, hi = bound
+    max_profit = 100 * (hi / bprice - 1)
+    print(f'[INFO] Current max limit price: {api.qfmt(hi)} {env.qcoin} ' + \
+          f'(max possible profit: {max_profit:.2f}%)')
+    price = min(tprice, hi)
     # if we exceed the limit, take appropriate action
-    if tprice > limit:
-      if mprice > limit:
+    if tprice > hi:
+      if mprice > hi:
         # we do not accept the decreased profit, wait
         print(f'[SKIP] Maximum profit limit is too low')
         return False
       # we accept the decreased profit, take it
-      print(f'[INFO] Decreasing target profit to maximum limit {max_profit}%')
+      print(f'[INFO] Decreasing target profit to maximum limit {max_profit:.2f}%')
+    if price < lo:
+      print('[ERROR] Price too low')
+      return False
+    ql, qh = api.qty_bound(price)
+    if not ql <= sqty <= qh:
+      print('[ERROR] Sell amount out of allowed bounds')
+      return False
     # initiate limit sell
     if api.sell_coin_limit(session, sqty, price):
       profit = 100 * (price / bprice - 1)
-      print(f'[LIMIT SELL] executed at {price} limit (possible profit: {profit}%)')
+      print(f'[LIMIT SELL] executed at {api.qfmt(price)} limit (possible profit: {profit:.2f}%)')
       return True
     else:
-      print(f'[ERROR] Limit sell failed, continuing...')
+      print('[ERROR] Limit sell failed, continuing...')
     return False
 
   def sell_coins(self, session: requests.Session,
@@ -103,24 +108,33 @@ class MarketManager:
       print(f'[INFO] Attempting to sell {sell_bqty} {bcoin} at {tprice} {env.qcoin} ' + \
             f'[{orders} orders left]')
 
-      # sleep for 100ms not to overload the API
-      sleep(0.1)
+      # sleep a little
+      sleep(env.sleep)
 
+      # fetch average price
+      avg = api.avg_price(session)
       if env.sell_strat != SellStrategy.MARKET:
         # fetch upper sell limit
-        limit = api.sell_max_limit(session)
+        bound = api.price_bound(avg)
       if env.sell_strat != SellStrategy.LIMIT:
         # fetch last market price
         lprice = api.last_price(session)
 
       if env.sell_strat == SellStrategy.MARKET or env.sell_strat == SellStrategy.HYBRID:
+        lo, hi = api.qty_bound(avg, True)
+        if not lo <= sell_bqty <= hi:
+          if lo <= bqty <= hi:
+            sell_bqty = bqty
+          else:
+            print('[ERROR] Cannot market sell right now (base amount out of bounds)')
+            continue
         succ, qty = self.sell_coins_market(session, sell_bqty, tprice, buy_price, lprice)
         if succ:
           bqty -= qty
           orders -= 1
           continue
       if env.sell_strat == SellStrategy.LIMIT or env.sell_strat == SellStrategy.HYBRID:
-        if self.sell_coins_limit(session, sell_bqty, tprice, mprice, buy_price, limit):
+        if self.sell_coins_limit(session, sell_bqty, tprice, mprice, buy_price, bound):
           bqty -= sell_bqty
           orders -= 1
 
@@ -134,15 +148,14 @@ def coin_from_input(manager: MarketManager):
   while True:
     bcoin = ''
     while bcoin == '':
-      try:
-        bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
-      except Exception as e:
-        print(str(e))
-        return
+      bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
     try:
       manager.start(bcoin)
+    except InvalidPair as e:
+      print(str(e))
     except Exception as e:
       print(str(e))
+      return
 
 
 def coin_from_http(manager: MarketManager):
@@ -155,18 +168,6 @@ def qamount_check(amt: float, bal: float, pairs: dict):
     raise ValueError(f'Error: cannot sell non-positive amount of {env.qcoin}')
   if amt > bal:
     raise ValueError(f'Error: you cannot sell more {env.qcoin} than you have!')
-  if amt >= 0.95 * bal:
-    print(f'Warning: you are trying to sell more than 95% of your {env.qcoin}.\n' + \
-          'Attempting to buy that much might fail due to unexpected Binance errors!')
-  notional_warn = []
-  for asset, data in pairs.items():
-    filt = data['filters'][3]
-    if filt['applyToMarket'] and float(filt['minNotional']) >= amt:
-      notional_warn.append(asset)
-  if notional_warn:
-    print('Warning: for the following base assets you are in breach of the minimum notional limit:')
-    print(', '.join(notional_warn))
-    print('A market buy order will fail for these assets')
 
 
 def set_stdin(prompt: str, default):
@@ -220,10 +221,6 @@ def setup() -> (dict, float):
     if env.min_profit > env.profit:
       raise ValueError('Error: minimum allowed profit cannot exceed target profit!')
 
-    p = f'Allow increasing target profit to hit Binance sell limit? ' + \
-        f'[0|1, default: {int(env.inc_limit)}]: '
-    env.inc_limit = bool(set_stdin(p, env.inc_limit))
-
   print('---- SELECTED OPTIONS ----')
   print(f'Selected quote coin: {env.qcoin}')
   print(f'Selected quote amount to sell: {qamount} {env.qcoin} (available: {qbalance} {env.qcoin})')
@@ -231,7 +228,6 @@ def setup() -> (dict, float):
   print(f'Selected sell strategy: {env.sell_strat.name}')
   if env.sell_strat != SellStrategy.MARKET:
     print(f'Selected minimum acceptable profit: {env.min_profit}%')
-    print(f'Allow profit limit increase: {int(env.inc_limit)}')
   print('--------------------------')
   return symbols, qamount
 

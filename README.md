@@ -26,6 +26,7 @@ I will explain the configuration options here.
 * `BINANCE_API_KEY` and `BINANCE_API_SECRET` must contain your Binance API credentials. Get yours on your Binance account page, make sure to allow `Can Read` and `Enable Spot & Margin Trading` (turned on by default). No need to enable withdrawals or Futures!
 * `BASE_API_URL` contains the Binance API base URL to use. Do not change this unless necessary.
 * `SERVER_HOST` and `SERVER_PORT` specify the host and port for the coin name listener. Use this to receive a coin name via HTTP (from hooks like the one [here](https://github.com/tobyyy/tg-bps-script)).
+* `SLEEP_INTERVAL` specifies how long (in seconds) to wait between two sell attempts
 * `DEFAULT_OVERRIDE` may be set to `1` to enable prompts or `0` to disable them. Set it to `1` if you desire to make changes on startup.
 * `DEFAULT_QCOIN` is the name of your quote asset (coin): the coin you wish to sell and later buy back with profit
 * `DEFAULT_BUY_PERC` is the percentage of your quote asset balance you wish to sell. If prompts are not disabled, you can change the exact quote asset amount on startup
@@ -33,7 +34,6 @@ I will explain the configuration options here.
 * `DEFAULT_PROFIT` is your desired profit. Mind that setting your profit very high may impair your ability to set a successful limit sell. You should use `HYBRID` or `MARKET` strategies with high profits (such as >100%)
 * `DEFAULT_SELL_STRATEGY` is the sell strategy you wish to use. See [Sell strategies](#sell-strategies) for details. The options are `LIMIT`, `MARKET` and `HYBRID`.
 * `DEFAULT_MIN_PROFIT` (used with `HYBRID` and `LIMIT` sell strategies) is the minimum profit (in %) you are willing to accept using a limit sell. If the maximum price Binance allows falls between your `MIN_PROFIT` and `PROFIT`, a limit sell will be created at the maximum allowed limit.
-* `DEFAULT_ALLOW_LIMIT_INCREASE` (set to `0` to disable or `1` to enable, used with `HYBRID` and `LIMIT` sell strategies) to determine if your target profit should be increased for a limit sell attempt to match the current maximum price limit. For example, if you set `PROFIT` to 40% and Binance allows a 50% profit maximum, your target profit will increase to 50%. If `PROFIT` exceeds this limit, this has no effect.
 
 ## Sell strategies
 
