@@ -8,7 +8,7 @@ Follow the prompts and good luck.
 """
 
 import requests
-from threading import Thread, Lock
+from threading import Thread, Lock, Condition
 from server import HTTPCoinAcceptor
 from util import InvalidPair, Environment, SellStrategy, ffmt
 from api import BinanceApi
@@ -19,22 +19,37 @@ class MarketManager:
   def __init__(self, pairs: dict, qqty: float):
     self.qqty = qqty
     self.pairs = pairs
-    self.mutex = Lock()
-    self.done = False
+    # coin locking
+    self.m1 = Lock()
+    self.locked = False
+    # worker notification
+    self.m2 = Lock()
+    self.cv = Condition(self.m2)
+    self.ready = False
 
-  # True => success, False => repeat, Exception => abort
-  def start(self, bcoin: str):
-    self.mutex.acquire()
-    if self.done:
-      self.mutex.release()
-      raise Exception('Market operation already executed!')
+  # lock in a coin and notify main thread
+  # InvalidPair => bad coin/try again, Exception => abort
+  def lock(self, bcoin: str):
+    self.m1.acquire()
+    # reject if locked
+    if self.locked:
+      self.m1.release()
+      raise Exception('Market operation is already running!')
+    # retry if bad coin is turned in
     if bcoin not in self.pairs:
-      self.mutex.release()
+      self.m1.release()
       raise InvalidPair(f'Trading pair {bcoin}/{env.qcoin} not found')
-    self.done = True
-    self.mutex.release()
-
+    self.locked = True
+    self.m1.release()
+    # lock in a trading pair
     api.set_pair(self.pairs[bcoin])
+    # notify worker
+    with self.cv:
+      self.ready = True
+      self.cv.notify()
+
+  def start(self):
+    print(f'Market manager started with pair {api.pair["symbol"]}')
     with requests.Session() as session:
       # buy <bcoin> immediately at market price, get qty. and avg. price
       qty, price = api.buy_coin_market(session, self.qqty)
@@ -63,9 +78,11 @@ class MarketManager:
       print('[SKIP] Last market price is too low')
     return False, 0
 
-  def sell_coins_limit(self, session: requests.Session, sqty: float,
-                       prices: tuple, avg: float) -> bool:
-    bprice, tprice, mprice, sprice = prices
+  # sell coins using a limit sell
+  # <sqty> sell quantity
+  # <prices> {buy price, target price, minimum acceptable price, stop price, average price}
+  def sell_coins_limit(self, session: requests.Session, sqty: float, prices: tuple) -> bool:
+    bprice, tprice, mprice, sprice, avg = prices
     lo, hi = api.price_bound(avg)
     max_profit = 100 * (hi / bprice - 1)
     print(f'[INFO] Current max limit price: {api.qfmt(hi)} {env.qcoin} ' + \
@@ -140,7 +157,7 @@ class MarketManager:
           orders -= 1
           continue
       if env.sell_strat == SellStrategy.LIMIT or env.sell_strat == SellStrategy.HYBRID:
-        if self.sell_coins_limit(session, sell_bqty, (buy_price, tprice, mprice, sprice), avg):
+        if self.sell_coins_limit(session, sell_bqty, (buy_price, tprice, mprice, sprice, avg)):
           bqty -= sell_bqty
           orders -= 1
 
@@ -150,18 +167,24 @@ env = Environment()
 api = BinanceApi(env)
 
 
-def coin_from_input(manager: MarketManager):
+def coin_from_stdin(manager: MarketManager):
   while True:
-    bcoin = ''
-    while bcoin == '':
-      bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
     try:
-      manager.start(bcoin)
+      bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
+    except Exception:
+      break
+    if not bcoin:
+      continue
+    try:
+      manager.lock(bcoin)
+      break
     except InvalidPair as e:
       print(str(e))
     except Exception as e:
       print(str(e))
-      return
+      break
+  with manager.cv:
+    manager.cv.notify()
 
 
 def coin_from_http(manager: MarketManager):
@@ -255,10 +278,19 @@ def main():
 
   # Start a HTTP server listening for coin signals
   http_thr  = Thread(target=coin_from_http, args = (manager,), daemon=True)
+  stdin_thr = Thread(target=coin_from_stdin, args = (manager,), daemon=True)
   print(f'Starting HTTP listener at {env["SERVER_HOST"]}:{env["SERVER_PORT"]}')
   http_thr.start()
-  # Fetch coin info from stdin
-  coin_from_input(manager)
+  # Start stdin listener
+  stdin_thr.start()
+
+  # wait for coin lock
+  try:
+    with manager.cv:
+      manager.cv.wait_for(lambda: manager.ready)
+  except:
+    return
+  manager.start()
 
 
 if __name__ == '__main__':

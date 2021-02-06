@@ -4,11 +4,12 @@ from util import InvalidPair
 class MyHandler(BaseHTTPRequestHandler):
   def do_POST(self):
     len = int(self.headers.get('Content-Length'))
-    self.send_response(200)
+    coin = self.rfile.read(len).decode('utf-8').upper()
+    code, status = self.server.accept_coin(coin)
+    self.send_response(code)
     self.send_header('Content-type', 'application/json')
     self.end_headers()
-    self.wfile.write(bytes('{"status": "ok"}', 'utf-8'))
-    self.server.accept_coin(self.rfile.read(len).decode('utf-8').upper())
+    self.wfile.write(bytes(f'{{"status": "{status}"}}\n', 'utf-8'))
 
 
 class MyServer(HTTPServer):
@@ -17,8 +18,9 @@ class MyServer(HTTPServer):
     HTTPServer.__init__(self, *args, **kwargs)
     self.acceptor = acceptor
 
-  def accept_coin(self, coin: str):
-    self.acceptor.accept(coin)
+  # pass status message from CoinAcceptor
+  def accept_coin(self, coin: str) -> (int, str):
+    return self.acceptor.accept(coin)
 
 
 class HTTPCoinAcceptor:
@@ -29,22 +31,21 @@ class HTTPCoinAcceptor:
   def start(self):
     try:
       self.srv.serve_forever()
-    except KeyboardInterrupt:
-      self.stop()
     except Exception as e:
       print(str(e))
       self.stop()
 
-  def accept(self, coin: str):
+  # lock in a coin and return status message
+  def accept(self, coin: str) -> (int, str):
     try:
-      self.mgr.start(coin)
-      self.stop()
+      self.mgr.lock(coin)
+      return 200, 'ok'
     except InvalidPair as e:
       print(str(e))
+      return 400, 'invalid_symbol'
     except Exception as e:
       print(str(e))
-      self.stop()
+      return 200, 'closed'
 
   def stop(self):
-    print('closing')
     self.srv.server_close()
