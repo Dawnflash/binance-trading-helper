@@ -1,6 +1,6 @@
 # Binance trading helper
 
-This python script creates a market buy order followed by limit and/or market sell orders with a set profit. This only works at binance.com.
+This python script creates a market buy order followed by limit and/or market sell orders with a set profit. This only works on binance.com.
 
 Do not overuse, Binance only allows 100 orders per 10s and roughly 1200 requests per minute. You might get rate limited otherwise.
 
@@ -26,7 +26,7 @@ I will explain the configuration options here.
 * `BINANCE_API_KEY` and `BINANCE_API_SECRET` must contain your Binance API credentials. Get yours on your Binance account page, make sure to allow `Can Read` and `Enable Spot & Margin Trading` (turned on by default). No need to enable withdrawals or Futures!
 * `BASE_API_URL` contains the Binance API base URL to use. Do not change this unless necessary.
 * `SERVER_HOST` and `SERVER_PORT` specify the host and port for the coin name listener. Use this to receive a coin name via HTTP (from hooks like the one [here](https://github.com/tobyyy/tg-bps-script)).
-* `SLEEP_INTERVAL` specifies how long (in seconds) to wait between two sell attempts
+* `ALLOW_BAILOUT` lets you sell all remaining coins immediately when pressing `Ctrl+C` (see [Immediate market sell](#immediate-market-sell)). Set to 0 if you don't like this feature.
 * `DEFAULT_OVERRIDE` may be set to `1` to enable prompts or `0` to disable them. Set it to `1` if you desire to make changes on startup.
 * `DEFAULT_QCOIN` is the name of your quote asset (coin): the coin you wish to sell and later buy back with profit
 * `DEFAULT_BUY_PERC` is the percentage of your quote asset balance you wish to sell. If prompts are not disabled, you can change the exact quote asset amount on startup
@@ -40,7 +40,7 @@ I will explain the configuration options here.
 
 The script supports the following strategies to sell your coin with profit (default strategy is chosen with `DEFAULT_SELL_STRATEGY`):
 
-* `LIMIT` only allows limit sell orders to be made. You are limited by Binance's upper profit limit which the script calculates before attempting to sell. A limit sell will be made if your `MIN_PROFIT` is lower or equal to the current limit. Market sells won't be attempted. Using this strategy with very high profits might fail to create a successful order.
+* `LIMIT` only allows limit/OCO sell orders to be made. You are limited by Binance's upper profit limit which the script calculates before attempting to sell. A limit/OCO sell will be made if your `MIN_PROFIT` is lower or equal to the current limit. Market sells won't be attempted. Using this strategy with very high profits might fail to create a successful order. OCO orders will be placed if you set `DEFAULT_STOP_LEVEL` higher than -100.
 * `MARKET` only allows market sell orders to be made. You are **not** limited by Binance's profit limits but there is no guarantee that you get the profit you desire. The script makes a market sell if the last traded price exceeds your target profit. Limit sell orders won't be attempted.
 * `HYBRID` allows both market and limit orders to be made. First, a market order is attempted if the last traded price is above your target profit, then a limit sell order is attempted if the upper limit matches your profit criteria (`MIN_PROFIT` and `PROFIT`).
 
@@ -61,11 +61,11 @@ If at any given time for a given strategy no sell order may be made, the script 
 
 ### Immediate market sell
 
-Once the base asset is passed in and the script starts collecting market data, you can press `Ctrl+C` anytime to immediately sell all remaining base assets via market sell. Use this to bail out of unfavorable market conditions or take a lower profit.
+This feature is present if you set `ALLOW_BAILOUT=1`. Once the base asset is passed in and the script starts collecting market data, you can press `Ctrl+C` anytime to immediately sell all remaining base assets via market sell. Use this to bail out of unfavorable market conditions or take a lower profit.
 
 Mind that since limit/OCO sells are simply put on the order book and the script does not wait for their filling, this quick bailout option is best used with the `MARKET` strategy.
 
-If you wish to stop the script without selling all remaining assets, please kill or suspend it instead. On Linux the easiest way is pressing `Ctrl+Z` (suspend) followed by the `kill %%` command. On Windows (in native `CMD`) you may use the task manager (open it with `Ctrl+Shift+Esc`, click on the process list, type in "python" and kill the first process with `Alt+E`). I realize this is an inconvenience but the benefits seem to outweigh the negatives. On Linux it's very simple.
+If the feature is enabled and you wish to stop the script without triggering a sell, please kill or suspend it instead. Remember to set `ALLOW_BAILOUT=0` in advance if you don't want this feature.
 
 ## Binance API latency
 

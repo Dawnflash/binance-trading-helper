@@ -1,6 +1,11 @@
+""" A simple HTTP server listening for POST requests
+Each incoming POST request is assumed to carry a (case-insensitive) coin name
+"""
+
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from util import InvalidPair
 
+# POST request handler
 class MyHandler(BaseHTTPRequestHandler):
   def do_POST(self):
     len = int(self.headers.get('Content-Length'))
@@ -12,6 +17,7 @@ class MyHandler(BaseHTTPRequestHandler):
     self.wfile.write(bytes(f'{{"status": "{status}"}}\n', 'utf-8'))
 
 
+# A simple HTTP server carrying a CoinAcceptor handle
 class MyServer(HTTPServer):
   def __init__(self, acceptor, *args, **kwargs):
     # Because HTTPServer is an old-style class, super() can't be used.
@@ -23,6 +29,7 @@ class MyServer(HTTPServer):
     return self.acceptor.accept(coin)
 
 
+# HTTP server manager carrying a MarketManager handle
 class HTTPCoinAcceptor:
   def __init__(self, manager, conn):
     self.srv = MyServer(self, conn, MyHandler)
@@ -35,7 +42,7 @@ class HTTPCoinAcceptor:
       print(str(e))
       self.stop()
 
-  # lock in a coin and return status message
+  # lock in a coin and return HTTP code and status message
   def accept(self, coin: str) -> (int, str):
     try:
       self.mgr.lock(coin)

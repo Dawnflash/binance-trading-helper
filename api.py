@@ -1,4 +1,4 @@
-""" Binance API structures
+""" Binance API logic
 """
 
 import requests
@@ -15,13 +15,16 @@ class BinanceApi:
       self.data = data
       super().__init__(msg)
 
+  # initialize API from environment
+  # run `set_pair` before using trading methods
   def __init__(self, env: Environment):
     self.env  = env
     self.url  = env['BASE_API_URL']
     self.key  = env['BINANCE_API_KEY']
     self.bsec = bencode(env['BINANCE_API_SECRET'])
     self.pair = {} # current trading pair
-    self.pfilt = {}
+    self.pfilt = {} # pair filters
+    # ticks for lots and prices
     self.price_tick = 8
     self.lot_tick = 8
     self.mkt_lot_tick = 8
@@ -38,7 +41,8 @@ class BinanceApi:
   def qfmt(self, val: float) -> str:
     return ffmt(val, self.price_tick)
 
-  # set current trading pair and price precision
+  # set current trading pair, its filters and tick sizes
+  # calling this method is required to use trading features
   def set_pair(self, pair: dict):
     self.pair = pair
     for f in pair['filters']:
@@ -66,7 +70,7 @@ class BinanceApi:
     bval = bencode(urllib.parse.urlencode(val))
     return hmac.new(self.bsec, bval, hashlib.sha256).hexdigest()
 
-  # make a Binance API request
+  # make a Binance API request, return a parsed JSON response
   def req(self, session: requests.Session,
           method: str,
           uri: str,
@@ -96,13 +100,13 @@ class BinanceApi:
     _, resp = self.req(session, 'GET', 'exchangeInfo', signed=False)
     return resp
 
-  # return 1min average price
+  # return the average trading price
   def avg_price(self, session: requests.Session) -> float:
     _, resp = self.req(session, 'GET', 'avgPrice',
                       {'symbol': self.pair['symbol']}, signed=False)
     return float(resp['price'])
 
-  # return lower and upper price limit (<avg> avg price)
+  # return lower and upper price limit (<avg> average trading price)
   def price_bound(self, avg: float) -> (float, float):
     dnlimit, dnflimit = 0, 0
     uplimit, upflimit = float('inf'), float('inf')
@@ -137,13 +141,13 @@ class BinanceApi:
       return max(float(f['minQty']), not_lim), float(f['maxQty'])
     return 0, float('inf')
 
-  # return last price
+  # return last traded price
   def last_price(self, session: requests.Session) -> float:
     _, resp = self.req(session, 'GET', 'ticker/price',
                       {'symbol': self.pair['symbol']}, signed=False)
     return float(resp['price'])
 
-  # get <qcoin> balance in your spot account
+  # get <qcoin> balance in your spot wallet
   def coin_balance(self, session: requests.Session) -> float:
     _, resp = self.req(session, 'GET', 'account', {'timestamp': tstamp()})
     if 'balances' not in resp:
@@ -156,7 +160,7 @@ class BinanceApi:
         return bf
     raise CException(f'Coin {self.env.qcoin} not found in your account')
 
-  # get valid exchange symbols for a give quote coin
+  # get valid trade symbols for a given quote coin in a dictionary
   def quote_symbols(self, exinfo: dict) -> dict:
     symbols = {}
     if 'symbols' not in exinfo:
@@ -171,7 +175,8 @@ class BinanceApi:
       raise InvalidPair(f'No usable */{self.env.qcoin} trading pairs found')
     return symbols
 
-  # print market order status and return average fill price
+  # print market order status and return executed qty and average fill price
+  # <resp>: response object from `req`
   def market_order_status(self, resp: dict) -> (float, float):
     bcoin = self.pair['baseAsset']
     bqty, qqty = float(resp["executedQty"]), float(resp["cummulativeQuoteQty"])

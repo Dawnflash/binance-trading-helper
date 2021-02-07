@@ -90,19 +90,20 @@ class Environment:
   def __init__(self, f: str = '.env'):
     self.raw = get_env_data_as_dict(
       os.path.join(os.path.dirname(os.path.realpath(__file__)), f))
-    self.conn = self.raw['SERVER_HOST'], int(self.raw['SERVER_PORT'])
+    self.conn = self['SERVER_HOST'], int(self['SERVER_PORT'])
+    self.bailout = bool(self['ALLOW_BAILOUT'])
 
-    self.override   = bool(int(self.raw['DEFAULT_OVERRIDE']))
-    self.qcoin      = self.raw['DEFAULT_QCOIN']
-    self.buy_perc   = float(self.raw['DEFAULT_BUY_PERC'])
-    self.sell_perc  = float(self.raw['DEFAULT_SELL_PERC'])
-    self.profit     = float(self.raw['DEFAULT_PROFIT'])
-    self.stop       = float(self.raw['DEFAULT_STOP_LEVEL'])
-    self.sell_strat = SellStrategy(self.raw['DEFAULT_SELL_STRATEGY'])
+    self.override   = bool(int(self['DEFAULT_OVERRIDE']))
+    self.qcoin      = self['DEFAULT_QCOIN']
+    self.buy_perc   = float(self['DEFAULT_BUY_PERC'])
+    self.sell_perc  = float(self['DEFAULT_SELL_PERC'])
+    self.profit     = float(self['DEFAULT_PROFIT'])
+    self.stop       = float(self['DEFAULT_STOP_LEVEL'])
+    self.sell_strat = SellStrategy(self['DEFAULT_SELL_STRATEGY'])
     if self.sell_strat == SellStrategy.MARKET:
       self.min_profit = self.profit
     else:
-      self.min_profit = float(self.raw['DEFAULT_MIN_LIMIT_PROFIT'])
+      self.min_profit = float(self['DEFAULT_MIN_LIMIT_PROFIT'])
 
   def __getitem__(self, key):
     return self.raw[key]
