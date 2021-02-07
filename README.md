@@ -58,3 +58,20 @@ Once the base asset is bought, the script will start attempts to sell it using t
 The script will make at most 91 orders total (including the market buy). If 90 orders have already been made, the remaining purchased base asset amount will be sold at once if possible.
 
 If at any given time for a given strategy no sell order may be made, the script will collect fresh API data and try again until it sells everything or you interrupt it with `Ctrl+C`.
+
+### Immediate market sell
+
+Once the base asset is passed in and the script starts collecting market data, you can press `Ctrl+C` anytime to immediately sell all remaining base assets via market sell. Use this to bail out of unfavorable market conditions or take a lower profit.
+
+Mind that since limit/OCO sells are simply put on the order book and the script does not wait for their filling, this quick bailout option is best used with the `MARKET` strategy.
+
+If you wish to stop the script without selling all remaining assets, please kill or suspend it instead. On Linux the easiest way is pressing `Ctrl+Z` (suspend) followed by the `kill %%` command. On Windows (in native `CMD`) you may use the task manager (open it with `Ctrl+Shift+Esc`, click on the process list, type in "python" and kill the first process with `Alt+E`). I realize this is an inconvenience but the benefits seem to outweigh the negatives. On Linux it's very simple.
+
+## Binance API latency
+
+Binance hosts its API clusters in the far East, likely in the Tokyo AWS region. If you aren't living nearby, your latency to Binance's API might be unfavorable (400-800ms in Europe). To improve your latency, consider setting up a virtual machine near this region. An EC2 machine in the Tokyo AWS region only takes ~30ms to reach their servers.
+
+## Future improvements
+
+* `WebSockets` API support for rapid market price updates and higher performance
+* Improved market analysis to better support day trading
