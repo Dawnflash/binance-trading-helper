@@ -91,7 +91,6 @@ class Environment:
     self.raw = get_env_data_as_dict(
       os.path.join(os.path.dirname(os.path.realpath(__file__)), f))
     self.conn = self.raw['SERVER_HOST'], int(self.raw['SERVER_PORT'])
-    self.sleep = float(self.raw['SLEEP_INTERVAL'])
 
     self.override   = bool(int(self.raw['DEFAULT_OVERRIDE']))
     self.qcoin      = self.raw['DEFAULT_QCOIN']

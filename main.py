@@ -12,7 +12,6 @@ from threading import Thread, Lock, Condition
 from server import HTTPCoinAcceptor
 from util import InvalidPair, Environment, SellStrategy, CColors, CException, ffmt
 from api import BinanceApi
-from time import sleep
 
 
 # Primary logic structure, manages trades
@@ -151,9 +150,6 @@ class MarketManager:
         # sell the remaining coins if needed
         if self.bqty < self.sqty or orders == 1:
           self.sqty = self.bqty
-
-        # sleep a little
-        sleep(env.sleep)
 
         # fetch average and last traded price
         avg     = api.avg_price(session)
