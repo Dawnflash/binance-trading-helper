@@ -10,15 +10,25 @@ Follow the prompts and good luck.
 import requests
 from threading import Thread, Lock, Condition
 from server import HTTPCoinAcceptor
-from util import InvalidPair, Environment, SellStrategy, ffmt
+from util import InvalidPair, Environment, SellStrategy, CColors, CException, ffmt
 from api import BinanceApi
 from time import sleep
 
 
+# Primary logic structure, manages trades
 class MarketManager:
   def __init__(self, pairs: dict, qqty: float):
-    self.qqty = qqty
+    # all possible */<quote coin> pairs
     self.pairs = pairs
+    # pre-buy data
+    self.qqty = qqty
+    # after-buy data
+    self.bqty   = 0 # total bought qty
+    self.bprice = 0 # mean buy price
+    self.tprice = 0 # target sell price
+    self.mprice = 0 # minimum sell price (if limited)
+    self.sprice = 0 # stop price
+    self.sqty   = 0 # sell qty (at once)
     # coin locking
     self.m1 = Lock()
     self.locked = False
@@ -49,118 +59,130 @@ class MarketManager:
       self.cv.notify()
 
   def start(self):
-    print(f'Market manager started with pair {api.pair["symbol"]}')
+    CColors.iprint(f'Market manager started with pair {api.pair["symbol"]}')
     with requests.Session() as session:
       # buy <bcoin> immediately at market price, get qty. and avg. price
-      qty, price = api.buy_coin_market(session, self.qqty)
+      s, self.bqty, self.bprice = api.buy_coin_market(session, self.qqty)
+      if not s:
+        return
+      self.tprice = (1 + env.profit / 100) * self.bprice
+      self.mprice = (1 + env.min_profit / 100) * self.bprice
+      self.sprice = (1 + env.stop / 100) * self.bprice
+      self.sqty   = env.sell_perc / 100 * self.bqty
       # sell bought <bcoin> with <profit>% profit
-      self.sell_coins(session, qty, price)
+      self.sell_coins(session)
 
-  # sell <sqty> base coins on the market bought at <bprice>
-  # target price: <tprice>
-  # last market price: <lprice>
+  # sell coins using market sell
+  # <lprice>: last market price
+  # <force>: force sell, ignore bounds
   # if executed return True, <executed qty>, otherwise False, 0
-  def sell_coins_market(self, session: requests.Session, sqty: float,
-                        bprice: float) -> (bool, float):
-    lprice = api.last_price(session)
-    eprofit = 100 * (lprice / bprice - 1)
-    print(f'[INFO] Last market price is {api.qfmt(lprice)} {env.qcoin}' + \
-          f'(expected profit: {eprofit:.2f}%)')
+  def sell_coins_market(self, session: requests.Session, lprice: float,
+                        avg: float, force: bool = False) -> (bool, float):
+    eprofit = 100 * (lprice / self.bprice - 1)
 
-    # market sells only if last price exceeds target price
-    if eprofit > env.profit or eprofit <= env.stop:
+    # sell if forced or profit/loss limits are triggered
+    if force or eprofit > env.profit or eprofit <= env.stop:
+      if not force:
+        lo, hi = api.qty_bound(avg, True)
+        if not lo <= self.sqty <= hi:
+          if lo <= self.bqty <= hi:
+            self.sqty = self.bqty
+          else:
+            CColors.wprint('Sell quantity out of allowed bounds, cannot sell!')
+            return False
       # initiate market sell
-      qty, price = api.sell_coin_market(session, sqty)
-      profit  = 100 * (price / bprice - 1)
-      print(f'[MARKET SELL] executed with {profit:.2f}% profit')
+      s, qty, price = api.sell_coin_market(session, self.sqty)
+      if not s:
+        return False, 0
+      profit  = 100 * (price / self.bprice - 1)
+      if profit >= 0:
+        CColors.cprint(f'[MARKET SELL PROFIT] {profit:.2f}%', CColors.OKGREEN)
+      else:
+        CColors.cprint(f'[MARKET SELL LOSS] {profit:.2f}%', CColors.FAIL)
       return True, qty
-    else:
-      print('[SKIP] Last market price is too low')
     return False, 0
 
-  # sell coins using a limit sell
-  # <sqty> sell quantity
-  # <prices> {buy price, target price, minimum acceptable price, stop price, average price}
-  def sell_coins_limit(self, session: requests.Session, sqty: float, prices: tuple) -> bool:
-    bprice, tprice, mprice, sprice, avg = prices
+  # sell coins using a limit or OCO sell
+  # <avg> average market price
+  def sell_coins_limit(self, session: requests.Session, avg: float) -> bool:
     lo, hi = api.price_bound(avg)
-    max_profit = 100 * (hi / bprice - 1)
-    print(f'[INFO] Current max limit price: {api.qfmt(hi)} {env.qcoin} ' + \
-          f'(max possible profit: {max_profit:.2f}%)')
-    price = min(tprice, hi)
-    # if we exceed the limit, take appropriate action
-    if tprice > hi:
-      if mprice > hi:
+    max_profit = 100 * (hi / self.bprice - 1)
+    price = min(self.tprice, hi)
+    # if we exceed the limit try to decrease profit or fail
+    if self.tprice > hi:
+      if self.mprice > hi:
         # we do not accept the decreased profit, wait
-        print(f'[SKIP] Maximum profit limit is too low')
         return False
-      # we accept the decreased profit, take it
-      print(f'[INFO] Decreasing target profit to maximum limit {max_profit:.2f}%')
+      # accept the decreased profit
+      CColors.iprint(f'Decreasing target profit to {max_profit:.2f}%')
     if price < lo:
-      print('[ERROR] Price too low')
       return False
     ql, qh = api.qty_bound(price)
-    if not ql <= sqty <= qh:
-      print('[ERROR] Sell amount out of allowed bounds')
-      return False
+    if not ql <= self.sqty <= qh:
+      if ql <= self.bqty <= qh:
+        self.sqty = self.bqty
+      else:
+        CColors.wprint('Sell quantity out of allowed bounds, cannot sell!')
+        return False
     # try OCO if suitable
     if env.stop > -100 and api.pair['ocoAllowed']:
-      if api.sell_coin_oco(session, sqty, price, sprice):
-        profit = 100 * (price / bprice - 1)
-        print(f'[OCO SELL] executed at {api.qfmt(price)} limit (max profit: {profit:.2f}%), ' + \
-              f'stop {api.qfmt(price)} (max loss: {-env.stop:.2f}%)')
-        return True
-      else:
-        print('[ERROR] OCO sell failed, continuing...')
+      if not api.sell_coin_oco(session, self.sqty, price, self.sprice):
         return False
-    # initiate limit sell
-    if api.sell_coin_limit(session, sqty, price):
-      profit = 100 * (price / bprice - 1)
-      print(f'[LIMIT SELL] executed at {api.qfmt(price)} limit (possible profit: {profit:.2f}%)')
+      profit = 100 * (price / self.bprice - 1)
+      CColors.cprint(f'[OCO SELL] target profit: {profit:.2f}%, max loss: {-env.stop:.2f}%',
+                      CColors.OKGREEN)
       return True
-    else:
-      print('[ERROR] Limit sell failed, continuing...')
-    return False
+    # initiate limit sell
+    if not api.sell_coin_limit(session, self.sqty, price):
+      return False
+    profit = 100 * (price / self.bprice - 1)
+    CColors.cprint(f'[LIMIT SELL] target profit: {profit:.2f}%',
+                    CColors.OKGREEN)
+    return True
 
-  def sell_coins(self, session: requests.Session, bqty: float, buy_price: float):
-    bcoin     = api.pair['baseAsset']
-    tprice    = (1 + env.profit / 100) * buy_price
-    mprice    = (1 + env.min_profit / 100) * buy_price
-    sprice = (1 + env.stop / 100) * buy_price
-    orders    = 90 # maximum successful orders to make
-    sell_bqty = env.sell_perc / 100 * bqty # bqty to sell at once
+  def sell_coins(self, session: requests.Session):
+    bcoin   = api.pair['baseAsset']
+    orders  = 90  # maximum successful orders to make
+    avg     = 0   # average traded price
+    lprice  = 0   # last traded price
 
-    while bqty > 0 and orders > 0:
-      # sell the remaining coins if needed
-      if bqty < sell_bqty or orders == 1:
-        sell_bqty = bqty
-      print(f'[INFO] Attempting to sell {sell_bqty} {bcoin} at {api.qfmt(tprice)} {env.qcoin} ' + \
-            f'[{orders} orders left]')
+    try:
+      while self.bqty > 0 and orders > 0:
+        # sell the remaining coins if needed
+        if self.bqty < self.sqty or orders == 1:
+          self.sqty = self.bqty
 
-      # sleep a little
-      sleep(env.sleep)
+        # sleep a little
+        sleep(env.sleep)
 
-      # fetch average price
-      avg = api.avg_price(session)
+        # fetch average and last traded price
+        avg     = api.avg_price(session)
+        lprice  = api.last_price(session)
 
-      if env.sell_strat == SellStrategy.MARKET or env.sell_strat == SellStrategy.HYBRID:
-        lo, hi = api.qty_bound(avg, True)
-        if not lo <= sell_bqty <= hi:
-          if lo <= bqty <= hi:
-            sell_bqty = bqty
-          else:
-            print('[ERROR] Cannot market sell right now (base amount out of bounds)')
+        # calculate estimated profit
+        eprofit = 100 * (lprice / self.bprice - 1)
+        if eprofit >= 0:
+          CColors.cprint(f'[+{eprofit:.2f}%] 1 {bcoin} = {api.qfmt(lprice)} {env.qcoin}',
+                          CColors.OKGREEN)
+        else:
+          CColors.cprint(f'[{eprofit:.2f}%] 1 {bcoin} = {api.qfmt(lprice)} {env.qcoin}',
+                          CColors.FAIL)
+
+        if env.sell_strat == SellStrategy.MARKET or env.sell_strat == SellStrategy.HYBRID:
+          succ, qty = self.sell_coins_market(session, lprice, avg)
+          if succ:
+            self.bqty -= qty
+            orders -= 1
             continue
-        succ, qty = self.sell_coins_market(session, sell_bqty, buy_price)
-        if succ:
-          bqty -= qty
-          orders -= 1
-          continue
-      if env.sell_strat == SellStrategy.LIMIT or env.sell_strat == SellStrategy.HYBRID:
-        if self.sell_coins_limit(session, sell_bqty, (buy_price, tprice, mprice, sprice, avg)):
-          bqty -= sell_bqty
-          orders -= 1
-
+        if env.sell_strat == SellStrategy.LIMIT or env.sell_strat == SellStrategy.HYBRID:
+          if self.sell_coins_limit(session, avg):
+            self.bqty -= self.sqty
+            orders -= 1
+    except KeyboardInterrupt:
+      # Sell everything on market immediately
+      CColors.wprint('Selling on market immediately!')
+      self.sqty = self.bqty # sell everything
+      self.sell_coins_market(session, lprice, avg, True)
 
 # globals
 env = Environment()
@@ -168,9 +190,11 @@ api = BinanceApi(env)
 
 
 def coin_from_stdin(manager: MarketManager):
+  p = CColors.cstr('Enter base coin symbol (coin to buy and sell): ',
+                    CColors.WARNING)
   while True:
     try:
-      bcoin = input('Enter base coin symbol (coin to buy and sell): ').upper()
+      bcoin = input(p).upper()
     except Exception:
       break
     if not bcoin:
@@ -226,9 +250,9 @@ def setup() -> (dict, float):
   p = f'Enter percentage of base coin to sell at once [default: {env.sell_perc}]: '
   env.sell_perc = float(set_stdin(p, env.sell_perc))
   if not 0 < env.sell_perc <= 100:
-    raise ValueError('Error: cannot sell more than 100% at once')
+    raise CException('Error: cannot sell more than 100% at once')
   if env.sell_perc < 25:
-    print(f'Warning: selling {env.sell_perc:.2f}% at once might be too slow and/or ineffective')
+    CColors.wprint(f'Selling {env.sell_perc:.2f}% at once might be too slow and/or ineffective')
 
   p = f'Enter sell strategy (LIMIT|MARKET|HYBRID) [default: {env.sell_strat.name}]: '
   env.sell_strat = SellStrategy(set_stdin(p, env.sell_strat))
@@ -237,9 +261,9 @@ def setup() -> (dict, float):
   env.profit = float(set_stdin(p, env.profit))
 
   if env.profit <= 0:
-    print('Warning: you have set a non-positive profit. Proceeding may net you a loss!')
+    CColors.wprint('You have set a non-positive profit. Proceeding may net you a loss!')
   if env.profit >= 100 and env.sell_strat == SellStrategy.LIMIT:
-    print('Warning: you have set a high profit, limit orders may fail.\n' + \
+    CColors.wprint('You have set a high profit, limit orders may fail.\n' + \
           'Consider using MARKET or HYBRID strategy.')
   env.min_profit = min(env.min_profit, env.profit)
 
@@ -248,13 +272,13 @@ def setup() -> (dict, float):
     env.min_profit = float(set_stdin(p, env.min_profit))
 
     if env.min_profit > env.profit:
-      raise ValueError('Error: minimum allowed profit cannot exceed target profit!')
+      raise CException('Minimum allowed profit cannot exceed target profit!')
 
   p = 'Enter stop profit - stop limit price for limit orders (OCO) ' + \
       f'or stop market sells to mitigate loss [default: {env.stop:.2f}]: '
   env.stop = float(set_stdin(p, env.stop))
   if not -100 <= env.stop < env.min_profit:
-    raise ValueError('stop percentage must go below your profit limits!')
+    raise CException('Stop percentage must be lower than profits!')
 
   print('---- SELECTED OPTIONS ----')
   print(f'Selected quote coin: {env.qcoin}')
@@ -269,7 +293,6 @@ def setup() -> (dict, float):
 
 
 def main():
-  print('### Dawn\'s Binance market tool ###')
   if env.override:
     print('Want to skip prompts? Set DEFAULT_OVERRIDE to 0!')
 
@@ -280,6 +303,7 @@ def main():
   http_thr  = Thread(target=coin_from_http, args = (manager,), daemon=True)
   stdin_thr = Thread(target=coin_from_stdin, args = (manager,), daemon=True)
   print(f'Starting HTTP listener at {env["SERVER_HOST"]}:{env["SERVER_PORT"]}')
+  print('Once the base coin is passed and the process starts, press Ctrl+C anytime to INSTANTLY MARKET SELL')
   http_thr.start()
   # Start stdin listener
   stdin_thr.start()

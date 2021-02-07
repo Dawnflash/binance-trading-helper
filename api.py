@@ -5,12 +5,12 @@ import requests
 import hmac
 import hashlib
 import urllib
-from util import Environment, bencode, ffmt, tstamp, InvalidPair
+from util import Environment, bencode, ffmt, tstamp, InvalidPair, CColors, CException
 
 
 # class for communicating with Binance API
 class BinanceApi:
-  class ApiError(ValueError):
+  class ApiError(CException):
     def __init__(self, msg, data):
       self.data = data
       super().__init__(msg)
@@ -84,9 +84,9 @@ class BinanceApi:
 
     # check for issues
     if resp.status_code == 418: # IP ban
-      raise Exception(f"Your IP is banned for {resp.headers['Retry-After']} seconds. Wait!")
+      raise CException(f"Your IP is banned for {resp.headers['Retry-After']} seconds. Wait!")
     if resp.status_code == 429: # Rate limiting
-      raise Exception(f"Your IP is rate limited for {resp.headers['Retry-After']} seconds. Wait!")
+      raise CException(f"Your IP is rate limited for {resp.headers['Retry-After']} seconds. Wait!")
     if not resp.ok: # other issues
       raise self.ApiError(f'Request for {url} failed\n{resp.status_code}: {resp.json()}', resp.json())
     return resp.headers, resp.json()
@@ -147,15 +147,14 @@ class BinanceApi:
   def coin_balance(self, session: requests.Session) -> float:
     _, resp = self.req(session, 'GET', 'account', {'timestamp': tstamp()})
     if 'balances' not in resp:
-      raise Exception(f'Failed to query user data, bailing out')
+      raise CException(f'Failed to query user data, bailing out')
     for balance in resp['balances']:
       if balance['asset'] == self.env.qcoin:
         bf, bl = float(balance['free']), float(balance['locked'])
         print(f'Your free balance for {self.env.qcoin} is {ffmt(bf)} ' + \
               f'(locked: {ffmt(bl)})')
         return bf
-    raise Exception(f'Coin {self.env.qcoin} not found in your account. ' + \
-                    'Make sure to choose a valid coin!')
+    raise CException(f'Coin {self.env.qcoin} not found in your account')
 
   # get valid exchange symbols for a give quote coin
   def quote_symbols(self, exinfo: dict) -> dict:
@@ -169,17 +168,18 @@ class BinanceApi:
         symbol['quoteAsset'] == self.env.qcoin:
         symbols[symbol['baseAsset']] = symbol
     if not symbols:
-      raise InvalidPair(f'No usable trading pairs found for quote asset {self.env.qcoin}')
+      raise InvalidPair(f'No usable */{self.env.qcoin} trading pairs found')
     return symbols
 
-  # print buy order status and return average fill price
-  def order_status(self, resp: dict) -> (float, float):
+  # print market order status and return average fill price
+  def market_order_status(self, resp: dict) -> (float, float):
     bcoin = self.pair['baseAsset']
     bqty, qqty = float(resp["executedQty"]), float(resp["cummulativeQuoteQty"])
-    print(f'Executed market order (status: {resp["status"]})')
-    v1 = 'bought' if resp['side'] == 'BUY' else 'sold'
-    v2 = 'with' if resp['side'] == 'BUY' else 'for'
-    print(f'{v1.capitalize()} {self.bfmt(bqty)} {bcoin} {v2} {self.qfmt(qqty)} {self.env.qcoin}')
+    CColors.iprint(f'Executed market order (status: {resp["status"]})')
+    if resp['side'] == 'BUY':
+      print(f'Bought {self.bfmt(bqty)} {bcoin} with {self.qfmt(qqty)} {self.env.qcoin}')
+    else:
+      print(f'Sold {self.bfmt(bqty)} {bcoin} for {self.qfmt(qqty)} {self.env.qcoin}')
     print('Fills:')
     price = 0
     for fill in resp['fills']:
@@ -187,17 +187,17 @@ class BinanceApi:
       price += p * q / bqty
       print(f'  {self.bfmt(q)} {bcoin} at {self.qfmt(p)} {self.env.qcoin} ' + \
             f'(fee: {fill["commission"]} {fill["commissionAsset"]})')
-    print(f'Average price: {self.qfmt(price)} {self.env.qcoin}')
+    print(f'Average fill price: {self.qfmt(price)} {self.env.qcoin}')
     if (price == 0):
-      raise ValueError(f'Total price of {v1} {bcoin} seems to be zero. ' + \
-                      'Something is wrong! Check Binance manually!')
+      raise CException(f'Average fill price seems to be zero')
     return bqty, price
 
   # buy <bcoin> with <qqty> of <qcoin> at market price
-  # return amount of <bcoin> purchased (executed) and average (weighted) price in <qcoin>
-  def buy_coin_market(self, session: requests.Session, qqty: float) -> (float, float):
+  # return amount of <bcoin> purchased and average trade price
+  def buy_coin_market(self, session: requests.Session, qqty: float) -> (bool, float, float):
     bcoin = self.pair['baseAsset']
-    print(f'Buying {bcoin} using {self.qfmt(qqty)} {self.env.qcoin} at market price...')
+    s = f'[MARKET BUY] Buying {bcoin} with {self.qfmt(qqty)} {self.env.qcoin}'
+    CColors.cprint(s, CColors.WARNING)
 
     params = {
       'symbol': self.pair['symbol'],
@@ -206,15 +206,19 @@ class BinanceApi:
       'quoteOrderQty': self.qfmt(qqty), # buy with <qqty> of <qcoin>
       'timestamp': tstamp()
     }
-    _, resp = self.req(session, 'POST', 'order', params)
-
-    return self.order_status(resp)
+    try:
+      _, resp = self.req(session, 'POST', 'order', params)
+      return (True, *self.market_order_status(resp))
+    except BinanceApi.ApiError as e:
+      CColors.eprint(f'Market buy failed with {e.data}')
+      return False, 0, 0
 
   # sell <bqty> of <bcoin> for <qcoin> at market price
-  # return amount of <qcoin> purchased (executed) and average (weighted) price in <bcoin>
-  def sell_coin_market(self, session: requests.Session, bqty: float) -> (float, float):
+  # return success, amount of <qcoin> purchased and average trade price
+  def sell_coin_market(self, session: requests.Session, bqty: float) -> (bool, float, float):
     bcoin = self.pair['baseAsset']
-    print(f'Selling {self.bfmt_mkt(bqty)} {bcoin} at market price...')
+    CColors.cprint(f'[MARKET SELL] Selling {self.bfmt_mkt(bqty)} {bcoin}',
+                    CColors.WARNING)
 
     params = {
       'symbol': self.pair['symbol'],
@@ -223,15 +227,18 @@ class BinanceApi:
       'quantity': self.bfmt_mkt(bqty), # sell <bqty> of <bcoin>
       'timestamp': tstamp()
     }
-    _, resp = self.req(session, 'POST', 'order', params)
-
-    return self.order_status(resp)
+    try:
+      _, resp = self.req(session, 'POST', 'order', params)
+      return (True, *self.market_order_status(resp))
+    except BinanceApi.ApiError as e:
+      CColors.eprint(f'Market sell failed with {e.data}')
+      return False, 0, 0
 
   # sell <bqty> of <bcoin>, return success
   def sell_coin_limit(self, session: requests.Session, bqty: float, price: float) -> bool:
     bcoin = self.pair['baseAsset']
-    print(f'Selling {self.bfmt(bqty)} {bcoin} for {self.env.qcoin} ' + \
-          f'at price limit {self.qfmt(price)}...')
+    CColors.cprint(f'[LIMIT SELL] Selling {self.bfmt(bqty)} {bcoin} at {self.qfmt(price)}',
+                    CColors.WARNING)
 
     params = {
       'symbol': self.pair['symbol'],
@@ -244,18 +251,19 @@ class BinanceApi:
     }
     try:
       _, resp = self.req(session, 'POST', 'order', params)
-      print(f'Executed limit sell order (status: {resp["status"]})')
+      CColors.iprint(f'Executed limit sell order (status: {resp["status"]})')
     except BinanceApi.ApiError as e:
-      print(f'Limit sell failed with {e.data}')
+      CColors.eprint(f'Limit sell failed with {e.data}')
       return False
     return True
-  
+
   # sell <bqty> of <bcoin> as OCO, return success
   def sell_coin_oco(self, session: requests.Session,
                     bqty: float, price: float, sprice: float) -> bool:
     bcoin = self.pair['baseAsset']
-    print(f'Selling {self.bfmt(bqty)} {bcoin} for {self.env.qcoin} ' + \
-          f'at price limit {self.qfmt(price)}...')
+    s = f'[OCO SELL] Selling {self.bfmt(bqty)} {bcoin} at {self.qfmt(price)}' + \
+        f', stop: {self.qfmt(sprice)}'
+    CColors.cprint(s, CColors.WARNING)
 
     params = {
       'symbol': self.pair['symbol'],
@@ -269,8 +277,8 @@ class BinanceApi:
     }
     try:
       _, resp = self.req(session, 'POST', 'order/oco', params)
-      print(f'Executed OCO order (status: {resp["listOrderStatus"]})')
+      CColors.iprint(f'Executed OCO order (status: {resp["listOrderStatus"]})')
     except BinanceApi.ApiError as e:
-      print(f'OCO sell failed with {e.data}')
+      CColors.eprint(f'OCO sell failed with {e.data}')
       return False
     return True

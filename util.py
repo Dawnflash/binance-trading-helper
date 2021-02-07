@@ -33,16 +33,56 @@ def bencode(val: str) -> bytes:
   return bytes(val, 'UTF-8')
 
 
-# exception when an invalid trading pair is chosen
-class InvalidPair(ValueError):
-  pass
-
-
 # sell strategy enum
 class SellStrategy(Enum):
   LIMIT = 'LIMIT'
   MARKET = 'MARKET'
   HYBRID = 'HYBRID'
+
+
+# pretty printing
+class CColors(Enum):
+  OKBLUE = '\033[94m'
+  OKCYAN = '\033[96m'
+  OKGREEN = '\033[92m'
+  WARNING = '\033[93m'
+  FAIL = '\033[91m'
+  ENDC = '\033[0m'
+
+  @classmethod
+  def cstr(cls, val: str, col) -> str:
+    return f'{col.value}{val}{cls.ENDC.value}'
+
+  @classmethod
+  def cprint(cls, val: str, col):
+    print(cls.cstr(val, col))
+
+  @classmethod
+  def iprint(cls, val: str):
+    cls.cprint(f'[INFO] {val}', cls.OKBLUE)
+
+  @classmethod
+  def eprint(cls, val: str):
+    cls.cprint(f'[FAIL] {val}', cls.FAIL)
+
+  @classmethod
+  def wprint(cls, val: str):
+    cls.cprint(f'[WARN] {val}', cls.WARNING)
+
+  @classmethod
+  def oprint(cls, val: str):
+    cls.cprint(f'[OK] {val}', cls.OKGREEN)
+
+
+# colored value error
+class CException(Exception):
+  def __init__(self, msg):
+    super().__init__(CColors.cstr(f'[ERROR] {msg}', CColors.FAIL))
+
+
+# exception when an invalid trading pair is chosen
+class InvalidPair(CException):
+  pass
 
 
 # global environment
