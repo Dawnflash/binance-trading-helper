@@ -43,7 +43,7 @@ class MarketManager:
     # reject if locked
     if self.locked:
       self.m1.release()
-      raise Exception('Market operation is already running!')
+      raise CException('Market operation is already running!')
     # retry if bad coin is turned in
     if bcoin not in self.pairs:
       self.m1.release()
