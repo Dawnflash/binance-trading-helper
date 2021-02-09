@@ -5,105 +5,100 @@ import os
 import time
 from enum import Enum
 
-# read file at <path> and extract envvars from it
-def get_env_data_as_dict(path: str) -> dict:
-  env = {}
-  with open(path, 'r') as f:
-    for line in f.readlines():
-      line = line.strip()
-      if line.startswith('#') or line == '':
-        continue
-      k, v = line.strip().split('=')
-      env[k.strip()] = v.strip()
-  return env
-
-
-# format float to 8 decimals with stripped zeros
 def ffmt(val: float, decimals: int = 8) -> str:
-  return f'{val:.{decimals}f}'
+    """ format float to 8 decimals with stripped zeros """
+    return f'{val:.{decimals}f}'
 
-
-# current timestamp in milliseconds
 def tstamp() -> int:
-  return time.time_ns() // 1000000
+    """ current timestamp in milliseconds """
+    return time.time_ns() // 1000000
 
-
-# UTF-8 string to bytes
 def bencode(val: str) -> bytes:
-  return bytes(val, 'UTF-8')
+    """ UTF-8 string to bytes """
+    return bytes(val, 'UTF-8')
 
+class SellType(Enum):
+    """ sell strategy enum """
+    LIMIT = 'LIMIT'
+    MARKET = 'MARKET'
+    HYBRID = 'HYBRID'
 
-# sell strategy enum
-class SellStrategy(Enum):
-  LIMIT = 'LIMIT'
-  MARKET = 'MARKET'
-  HYBRID = 'HYBRID'
-
-
-# pretty printing
 class CColors(Enum):
-  OKBLUE = '\033[94m'
-  OKCYAN = '\033[96m'
-  OKGREEN = '\033[92m'
-  WARNING = '\033[93m'
-  FAIL = '\033[91m'
-  ENDC = '\033[0m'
+    """ class supporting colored printing and strings """
+    OKBLUE = '\033[94m'
+    OKCYAN = '\033[96m'
+    OKGREEN = '\033[92m'
+    WARNING = '\033[93m'
+    FAIL = '\033[91m'
+    ENDC = '\033[0m'
 
-  @classmethod
-  def cstr(cls, val: str, col) -> str:
-    return f'{col.value}{val}{cls.ENDC.value}'
+    @classmethod
+    def cstr(cls, val: str, col) -> str:
+        """ return colored string """
+        return f'{col.value}{val}{cls.ENDC.value}'
 
-  @classmethod
-  def cprint(cls, val: str, col):
-    print(cls.cstr(val, col))
+    @classmethod
+    def cprint(cls, val: str, col):
+        """ print colored message """
+        print(cls.cstr(val, col))
 
-  @classmethod
-  def iprint(cls, val: str):
-    cls.cprint(f'[INFO] {val}', cls.OKBLUE)
+    @classmethod
+    def iprint(cls, val: str):
+        """ print info message """
+        cls.cprint(f'[INFO] {val}', cls.OKBLUE)
 
-  @classmethod
-  def eprint(cls, val: str):
-    cls.cprint(f'[FAIL] {val}', cls.FAIL)
+    @classmethod
+    def eprint(cls, val: str):
+        """ print error message """
+        cls.cprint(f'[FAIL] {val}', cls.FAIL)
 
-  @classmethod
-  def wprint(cls, val: str):
-    cls.cprint(f'[WARN] {val}', cls.WARNING)
+    @classmethod
+    def wprint(cls, val: str):
+        """ print warning message """
+        cls.cprint(f'[WARN] {val}', cls.WARNING)
 
-  @classmethod
-  def oprint(cls, val: str):
-    cls.cprint(f'[OK] {val}', cls.OKGREEN)
+    @classmethod
+    def oprint(cls, val: str):
+        """ print OK message """
+        cls.cprint(f'[OK] {val}', cls.OKGREEN)
 
-
-# colored value error
 class CException(Exception):
-  def __init__(self, msg):
-    super().__init__(CColors.cstr(f'[ERROR] {msg}', CColors.FAIL))
+    """ colored value error """
+    def __init__(self, msg):
+        super().__init__(CColors.cstr(f'[ERROR] {msg}', CColors.FAIL))
 
 
-# exception when an invalid trading pair is chosen
 class InvalidPair(CException):
-  pass
+    """ exception when an invalid trading pair is chosen """
 
+class Environment(dict):
+    """ global environment, raw values are stored as dictionary values """
+    def __init__(self, fname: str, *args, **kwargs):
+        """ <fname>: name of the environment file """
+        super().__init__(*args, **kwargs)
+        self.set_from_env(fname)
 
-# global environment
-class Environment:
-  def __init__(self, f: str = '.env'):
-    self.raw = get_env_data_as_dict(
-      os.path.join(os.path.dirname(os.path.realpath(__file__)), f))
-    self.conn = self['SERVER_HOST'], int(self['SERVER_PORT'])
-    self.bailout = bool(self['ALLOW_BAILOUT'])
+        self.conn = self['SERVER_HOST'], int(self['SERVER_PORT'])
+        self.bailout = bool(self['BAILOUT'])
+        self.usd_value  = float(self['BUY_VALUE_USD'])
+        self.src_coins  = [coin.strip().upper() for coin
+                           in self['SOURCE_COINS'].split(',')]
 
-    self.override   = bool(int(self['DEFAULT_OVERRIDE']))
-    self.qcoin      = self['DEFAULT_QCOIN']
-    self.buy_perc   = float(self['DEFAULT_BUY_PERC'])
-    self.sell_perc  = float(self['DEFAULT_SELL_PERC'])
-    self.profit     = float(self['DEFAULT_PROFIT'])
-    self.stop       = float(self['DEFAULT_STOP_LEVEL'])
-    self.sell_strat = SellStrategy(self['DEFAULT_SELL_STRATEGY'])
-    if self.sell_strat == SellStrategy.MARKET:
-      self.min_profit = self.profit
-    else:
-      self.min_profit = float(self['DEFAULT_MIN_LIMIT_PROFIT'])
+        self.override   = bool(int(self['PROMPT_OVERRIDE']))
+        self.qcoin      = self['DEFAULT_QCOIN'].upper()
+        self.buy_perc   = float(self['DEFAULT_BUY_PERC'])
+        self.sell_type  = SellType(self['DEFAULT_SELL_TYPE'])
+        self.profit     = float(self['DEFAULT_PROFIT'])
+        self.stop       = float(self['DEFAULT_STOP_LEVEL'])
 
-  def __getitem__(self, key):
-    return self.raw[key]
+    def set_from_env(self, fname: str):
+        """ read <fname> in the script's directory and extract envvars from it
+            use variables from the environment if applicable """
+        path = os.path.join(os.path.dirname(os.path.realpath(__file__)), fname)
+        with open(path, 'r') as file:
+            for line in file.readlines():
+                line = line.strip()
+                if line.startswith('#') or line == '':
+                    continue
+                key, val = (s.strip() for s in line.strip().split('='))
+                self[key] = os.getenv(key, val)
