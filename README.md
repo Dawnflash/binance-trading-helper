@@ -36,7 +36,7 @@ I will explain the configuration options here.
 * `DEFAULT_BUY_PERC` is the percentage of your quote asset balance you wish to sell. If prompts are not disabled, you can change the exact quote asset amount on startup
 * `DEFAULT_SELL_TYPE` is the sell type you wish to use. See [Sell types](#sell-types) for details. The options are `LIMIT` and `MARKET`.
 * `DEFAULT_PROFIT` is your desired profit. Mind that setting your profit very high may impair your ability to set a successful limit sell. You should use the `MARKET` sell type with high profits (such as >100%) or in a high-volatility scenario to ensure a sell.
-* `DEFAULT_STOP_LEVEL` is the stop level (buy price percentage) to help you automatically manage risk. If your sell type is `MARKET` and the last traded price falls below this threshold, a market sell will trigger. If you use `LIMIT` and stop value is >-100, limit orders will be replaced with OCO orders with stop price at this level. A limit (low) price will be placed at 95% of this level. Must be lower than your profit.
+* `DEFAULT_STOP_LEVEL` is the stop level (buy price percentage) to help you automatically manage risk. If your sell type is `MARKET` and the last traded price falls below this threshold, a market sell will trigger. If you use `LIMIT` and stop value is >-100, limit orders will be replaced with OCO orders with stop price at this level. A limit (low) price will be placed at 98% of this level. Must be lower than your profit.
 
 ## Quote restock
 
@@ -48,8 +48,8 @@ If `BUY_VALUE_USD=0`, `BUY_PERC` will be used instead to derive a proportional q
 
 The script supports the following sell types to sell your coin with profit (default type is chosen with `DEFAULT_SELL_TYPE`):
 
-* `LIMIT` only allows limit/OCO sell orders to be made. You are limited by Binance's percentual limits which the script calculates after buying your base coins. A limit/OCO sell will be made at the prices defined by your `STOP_LEVEL` and `PROFIT` or adjusted to meet Binance's limits. Market sells won't be attempted. OCO orders will be placed if you set `DEFAULT_STOP_LEVEL` higher than -100. The important takeaway is that your profit and loss limits may be adjusted to meet Binance's rules! The adjustment only occurs right after buying, so a sell either executes immediately or fails. Use this sell type for comfortable low to moderate volatility scenarios and day trading. In a very high volatility scenario your maker order might be skipped and you may even net a bigger loss than you'd wish to accept. If the `BAILOUT` feature is enabled
-* `MARKET` only allows market sell orders to be made. You are **not** limited by Binance's profit limits but there is no guarantee that you get the profit you desire. The script makes a market sell if the last traded price exceeds your target profit or the expected loss drops below your `STOP_LEVEL`. You can additionally use the `BAILOUT` feature (see [Bailout](#bailout)) to get out fast. This sell type is safer for very high volatility markets but requires your attention. Monitor the price updates in the script's output and snipe your profit!
+* `LIMIT` only allows limit/OCO sell orders to be made. You are limited by Binance's percentual limits which the script calculates after buying your base coins. A limit/OCO sell will be made at the prices defined by your `STOP_LEVEL` and `PROFIT` or adjusted to meet Binance's limits. Market sells won't be attempted. OCO orders will be placed if you set `DEFAULT_STOP_LEVEL` higher than -100. The important takeaway is that your profit and loss limits may be adjusted to meet Binance's rules! The adjustment only occurs right after buying, so a sell either executes immediately or fails. Use this sell type for comfortable low to moderate volatility scenarios and day trading. In a very high volatility scenario your maker order might be skipped and you may even net a bigger loss than you'd wish to accept.
+* `MARKET` only allows market sell orders to be made. You are **not** limited by Binance's profit limits but there is no guarantee that you get the profit you desire. The script makes a market sell if the last traded price exceeds your target profit or the expected loss drops below your `STOP_LEVEL`. You can additionally use the `BAILOUT` feature (see [Bailout](#bailout)) to get out fast. This sell type is safer for very high volatility markets but requires your attention.
 
 ## Binance order limits
 
@@ -61,9 +61,7 @@ The script first goes through the initial configuration which uses defaults from
 
 Once you enter the base coin (manually or via the HTTP hook) and the trading pair selected is available for trading, the script will forbid further coin names from being entered and immediately buy your base asset with your quote asset using a market buy.
 
-Once the base asset is bought, the script will attempt to sell it using the provided sell type. Using the `LIMIT` sell type will either succeed or fail immediately. Using the `MARKET` sell type will start printing price updates alongside expected profits (profits are green, losses are red) and automatically sell upon hitting your profit/loss limits. Price updates are pulled from Binance's WebSockets API so you get fresh price updates as fast as possible.
-
-With the `MARKET` sell type use `Ctrl+C` to stop the script and optionally sell right away if `BAILOUT` is enabled.
+Once the base asset is bought, the script will attempt to sell it using the provided sell type. Using the `LIMIT` sell type will either succeed or fail immediately unless `BAILOUT` is on. Using the `MARKET` sell type will start printing price updates alongside expected profits (profits are green, losses are red) and automatically sell upon hitting your profit/loss limits. Price updates are pulled from Binance's WebSockets API so you get fresh price updates as fast as possible.
 
 ### Bailout
 

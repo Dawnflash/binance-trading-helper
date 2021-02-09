@@ -292,7 +292,7 @@ class BinanceAPI:
             'quantity': self.bfmt(bqty),
             'price': self.qfmt(price),
             'stopPrice': self.qfmt(sprice),
-            'stopLimitPrice': self.qfmt(sprice * 0.95),
+            'stopLimitPrice': self.qfmt(sprice * 0.98),
             'stopLimitTimeInForce': 'GTC' # good till cancelled
         }
         try:
