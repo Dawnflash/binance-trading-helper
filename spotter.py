@@ -36,11 +36,19 @@ class MinuteKline:
         self.qvol     = float(data[7])
         self.qvol_buy = float(data[10])
 
+class KlineLimits:
+    """ Simple limits for kline alerts """
+    def __init__(self, pthr: float, vthr: float, vmin: float, chgmin: float):
+        self.price_thr = pthr
+        self.price_chg_min = chgmin
+        self.vol_thr = vthr
+        self.vol_min = vmin
+
 class KlineStorage:
     """ storage of klines for a single symbol """
-    def __init__(self, symbol: dict, thresh: float = 0.1):
+    def __init__(self, symbol: dict, limits: KlineLimits):
         self.symbol = symbol
-        self.thresh = thresh
+        self.limits = limits
         self.nalarm = {}
         self.klines = []
 
@@ -55,8 +63,7 @@ class KlineStorage:
 
     def analyze(self):
         """ analyze single symbol """
-        # 5-min analysis
-        self.analyze_mins(5, CColors.WARNING)
+        self.analyze_mins(4, CColors.WARNING)
         self.analyze_mins(10, CColors.OKCYAN)
         self.analyze_mins(20, CColors.OKBLUE)
         self.analyze_mins(30, CColors.OKGREEN)
@@ -71,31 +78,33 @@ class KlineStorage:
         if mins not in self.nalarm:
             self.nalarm[mins] = 0
 
-        if dcl > self.thresh:
+        if rvol and dcl > self.limits.price_chg_min and \
+                    (dcl > self.limits.price_thr or rvol > self.limits.vol_thr and dcl) > 0:
             mult = self.nalarm[mins] + 1
-            CColors.cprint(f'{self.prefix(mult)} up {dcl:.2f}% in {mins}min, vol. chg. {rvol:.2f}%',
-                           color)
+            CColors.cprint(f'{self.prefix(mult)} up {dcl:.2f}% ' + \
+                           f'in {mins}min, vol. chg. {rvol:.2f}%', color)
         else:
             mult = 0
         self.nalarm[mins] = mult
 
     def vol_ratio(self, mins: int) -> float:
         """ get volume ratios in % between first and last half of the interval """
-        sep = -mins // 2
-        lat = sum((self.klines[i].qvol for i in range(-1, sep, -1)))
-        pre = sum((self.klines[i].qvol for i in range(sep, -mins - 1, -1))) + 1
+        half, full = -mins // 2 - 1, -mins - 1
+        lat = sum((self.klines[i].qvol for i in range(-1, half, -1)))
+        pre = sum((self.klines[i].qvol for i in range(half, full, -1)))
+        if pre < self.limits.vol_min or lat < self.limits.vol_min:
+            return 0
         return (lat / pre - 1) * 100
 
 class KlineManager:
     """ Manages received 1min Klines """
-
-    def __init__(self, symbols: list, nklines: int, thresh: float):
+    def __init__(self, symbols: list, nklines: int, limits: KlineLimits):
         if nklines <= 0:
             raise CException(f'Bad kline count: {nklines}')
         self.nklines = nklines
         self.symbols = {}
         for symb in symbols:
-            self.symbols[symb['symbol']] = KlineStorage(symb, thresh)
+            self.symbols[symb['symbol']] = KlineStorage(symb, limits)
 
     def update(self, data: dict):
         """ receive a kline and use it """
@@ -141,19 +150,24 @@ async def quote_symbols(api: BinanceAPI):
 async def main():
     """ Entrypoint """
     klen = 241 # 4h remanence
-    thresh = 5 # 5% sensitivity
+    thresh = 5, 900 # 5% positive price fluctuation, 900% positive volume fluctuation
+    min_vol = 0.1 # do not alert under 0.1 executed quote volume (tuned for BTC)
+    min_chg = 0.1 # minimum acceptable price change, regardless of volume
+    limits = KlineLimits(*thresh, min_vol, min_chg)
 
     env  = Environment('.env')
     api  = BinanceAPI(env)
     wapi = BinanceWSAPI(env)
+
     # fetch symbols to track
     qsymbols = await quote_symbols(api)
     qvalues  = qsymbols.values()
     symb_names = [symb['symbol'] for symb in qvalues]
     qlen = len(qvalues)
     CColors.iprint(f'DawnSpotter online.\nTracking {qlen} pairs: {", ".join(symb_names)}')
+
     # prepare the kline data structure
-    manager = KlineManager(qvalues, klen, thresh)
+    manager = KlineManager(qvalues, klen, limits)
     # Pull historical data from the API
     maxrun = 1200 // (qlen + 41)
     print(f'Pulling historical data from REST API, do not rerun this more than {maxrun}x/min!')
@@ -161,6 +175,7 @@ async def main():
         coros = (api.last_klines(client, '1m', klen, symbol) for symbol in qvalues)
         preconf = await asyncio.gather(*coros)
     manager.fill(zip(symb_names, preconf))
+
     # read trade data from WS
     print('Updating data from WebSockets...')
     async for tdata in wapi.klines_bulk(symb_names, '1m'):
