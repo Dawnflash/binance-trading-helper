@@ -333,24 +333,74 @@ class BinanceAPI:
             CColors.eprint(f'OCO order cancel failed with {exc.data}')
             return False, 0
 
+    async def last_klines(self, client: aiohttp.ClientSession,
+                          interval: str, limit: int, symbol: dict = None):
+        """ Fetch klines for a given symbol (default: own pair) """
+        if not symbol:
+            symbol = self.pair
+        params = {
+            'symbol': symbol['symbol'],
+            'interval': interval,
+            'limit': limit
+        }
+        _, resp = await self.req(client, 'GET', 'klines', params, {}, False)
+        return resp
+
+    async def ticker_24h(self, client: aiohttp.ClientSession,
+                         symbol: dict = None, single: bool = True):
+        """ fetch 24h tickers for all or single symbol """
+        if not symbol:
+            symbol = self.pair
+        params = {'symbol': symbol['symbol']} if single else {}
+        _, resp = await self.req(client, 'GET', 'ticker/24hr', params, {}, False)
+        return resp
+
 class BinanceWSAPI:
     """ class for communicating with Binance WebSockets API """
     def __init__(self, env: Environment):
         self.url = env['BASE_WSAPI_URL']
 
-    async def read_single(self, uri: str):
+    async def read(self, uri: str):
         """ subscribe to a single stream and yield data on reception """
         url = urllib.parse.urljoin(self.url, uri)
-        async with websockets.connect(url, ssl=True) as wsock:
-            while True:
-                yield json.loads(await wsock.recv())
+        while True:
+            try:
+                async with websockets.connect(url, ssl=True) as wsock:
+                    while True:
+                        yield json.loads(await wsock.recv())
+            except websockets.exceptions.WebSocketException as exc:
+                CColors.wprint(f'WebSockets error, attempting to reconnect: {exc}')
 
-    async def agg_trades(self, symbol: str):
-        """ get aggregated trade data for a given symbol """
-        async for val in self.read_single(f'ws/{symbol.lower()}@aggTrade'):
+    async def sub_single(self, stream: str):
+        """ subscribe to a single stream """
+        async for val in self.read(f'ws/{stream}'):
             yield val
 
-    async def tickers(self, symbol: str):
+    async def sub_multi(self, streams: list):
+        """ subscribe to multiple streams """
+        if len(streams) > 1024:
+            raise CException('Cannot subscribe to more than 1024 streams')
+        async for val in self.read(f'stream?streams={"/".join(streams)}'):
+            yield val
+
+    async def agg_trades_single(self, symbol: str):
+        """ get aggregated trade data for a given symbol """
+        async for val in self.sub_single(f'{symbol.lower()}@aggTrade'):
+            yield val
+
+    async def tickers_single(self, symbol: str):
         """ get 24h ticker data for a given symbol """
-        async for val in self.read_single(f'ws/{symbol.lower()}@ticker'):
+        async for val in self.sub_single(f'{symbol.lower()}@ticker'):
+            yield val
+
+    async def agg_trades_bulk(self, symbols: list):
+        """ get aggregated trade data for given symbols """
+        streams = [f'{symbol.lower()}@aggTrade' for symbol in symbols]
+        async for val in self.sub_multi(streams):
+            yield val
+
+    async def klines_bulk(self, symbols: list, interval: str):
+        """ get aggregated trade data for given symbols """
+        streams = [f'{symbol.lower()}@kline_{interval}' for symbol in symbols]
+        async for val in self.sub_multi(streams):
             yield val

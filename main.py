@@ -157,7 +157,7 @@ class MarketManager:
             if not self.env.bailout:
                 return
         self.allow_bailout = self.env.bailout
-        async for tdata in self.wapi.agg_trades(self.api.pair['symbol']):
+        async for tdata in self.wapi.agg_trades_single(self.api.pair['symbol']):
             # last traded price is the current market price
             _lprice = float(tdata['p'])
             if _lprice == lprice:
